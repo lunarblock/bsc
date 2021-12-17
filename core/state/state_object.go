@@ -25,6 +25,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -36,6 +37,8 @@ type Code []byte
 func (c Code) String() string {
 	return string(c) //strings.Join(Disassemble(c), " ")
 }
+
+type StorageKeys map[common.Hash]struct{}
 
 type Storage map[common.Hash]common.Hash
 
@@ -129,6 +132,40 @@ func newObject(db *StateDB, address common.Address, data Account) *StateObject {
 		pendingStorage: make(Storage),
 		dirtyStorage:   make(Storage),
 	}
+}
+
+// attention: thread safe
+// obj will overrite the origin StateObject
+// similar to deepCopy, but it is not copy but append mode
+func (s *StateObject) MergeStateObject(obj *StateObject, slotDB *StateDB) {
+	// tx Stage2, StateDB.Finalise() -> StateObject.finalise() will flush dirtyStorage to pendingStorage?
+	// so len(dirtyStorage) should be 0
+	log.Info("StateObject.MergeStateObject, dirtyStorage", "actual len(dirtyStorage)", len(obj.originStorage))
+	for key, val := range obj.dirtyStorage {
+		s.dirtyStorage[key] = val
+	}
+
+	log.Info("StateObject.MergeStateObject, pendingStorage", "actual len(pendingStorage)", len(obj.pendingStorage))
+	for key, val := range obj.pendingStorage {
+		s.pendingStorage[key] = val
+	}
+
+	// originStorage will be update when StateDB.Commit, to do Trie update.
+	log.Info("StateObject.MergeStateObject, originStorage", "actual len(originStorage)", len(obj.originStorage))
+	for key, val := range obj.originStorage {
+		s.originStorage[key] = val
+	}
+
+	// trie?
+	// data is the account: nonce, balance, rootHash, codeHash
+	s.data = obj.data
+	if obj.trie != nil {
+		s.trie = slotDB.db.CopyTrie(obj.trie)
+	}
+	s.dirtyCode = obj.dirtyCode
+	s.suicided = obj.suicided
+	s.deleted = obj.deleted
+	s.code = obj.code
 }
 
 // EncodeRLP implements rlp.Encoder.
@@ -238,6 +275,7 @@ func (s *StateObject) GetCommittedState(db Database, key common.Hash) common.Has
 			return common.Hash{}
 		}
 		enc, err = s.db.snap.Storage(s.addrHash, crypto.Keccak256Hash(key.Bytes()))
+		// log.Info("StateObject GetCommittedState get from snapshot", "error", err)
 	}
 	// If snapshot unavailable or reading from it failed, load from the database
 	if s.db.snap == nil || err != nil {
@@ -262,6 +300,7 @@ func (s *StateObject) GetCommittedState(db Database, key common.Hash) common.Has
 			s.setError(err)
 		}
 		value.SetBytes(content)
+		// log.Info("StateObject GetCommittedState enc Split", "addr", s.address, "key", key, "value", value)
 	}
 	s.originStorage[key] = value
 	return value
