@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/internal/debug"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -185,6 +186,7 @@ type Tree struct {
 // continuous with disk layer or the journal is missing, all diffs will be discarded
 // iff it's in "recovery" mode, otherwise rebuild is mandatory.
 func New(diskdb ethdb.KeyValueStore, triedb *trie.Database, cache, cap int, root common.Hash, async bool, rebuild bool, recovery bool) (*Tree, error) {
+	log.Info("Snapshot New", "root", root)
 	// Create a new, empty snapshot tree
 	snap := &Tree{
 		diskdb:   diskdb,
@@ -328,6 +330,7 @@ func (t *Tree) Snapshots(root common.Hash, limits int, nodisk bool) []Snapshot {
 		}
 		layer = parent
 	}
+	log.Info("Tree Snapshots", "root", root, "limits", limits, "len(ret layers)", len(ret))
 	return ret
 }
 
@@ -345,12 +348,14 @@ func (t *Tree) update(blockRoot common.Hash, parentRoot common.Hash, destructs m
 	//
 	// Although we could silently ignore this internally, it should be the caller's
 	// responsibility to avoid even attempting to insert such a snapshot.
+	log.Info("Tree update", "blockRoot", blockRoot, "parentRoot", parentRoot)
 	if blockRoot == parentRoot {
 		return errSnapshotCycle
 	}
 	// Generate a new snapshot on top of the parent
 	parent := t.Snapshot(parentRoot)
 	if parent == nil {
+		log.Info("Tree update parent snapshot not exist", "parentRoot", parentRoot)
 		return fmt.Errorf("parent [%#x] snapshot missing", parentRoot)
 	}
 	snap := parent.(snapshot).Update(blockRoot, destructs, accounts, storage, verified)
@@ -519,6 +524,7 @@ func (t *Tree) cap(diff *diffLayer, layers int) *diskLayer {
 // The disk layer persistence should be operated in an atomic way. All updates should
 // be discarded if the whole transition if not finished.
 func diffToDisk(bottom *diffLayer) *diskLayer {
+	defer debug.Handler.StartRegionAuto("diffToDisk")()
 	var (
 		base  = bottom.parent.(*diskLayer)
 		batch = base.diskdb.NewBatch()

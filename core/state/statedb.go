@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"runtime"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/internal/debug"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -200,8 +202,9 @@ func New(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, error) 
 // NewSlotDB creates a new slot stateDB base on the block stateDB
 // Will do StateDB Copy
 func NewSlotDB(db *StateDB, systemAddr common.Address, txIndex int, keepSystem bool) *StateDB {
+	traceMsg := "NewSlotDB" // + " txIndex:" + strconv.Itoa(txIndex)
+	defer debug.Handler.StartRegionAuto(traceMsg)()
 	log.Debug("NewSlotDB", " txIndex:", txIndex, "keepSystem", keepSystem)
-
 	slotDB := db.CopyForSlot()
 	slotDB.originalRoot = db.originalRoot
 	slotDB.baseTxIndex = txIndex
@@ -488,6 +491,16 @@ func (s *StateDB) SetSnapData(snapDestructs map[common.Address]struct{}, snapAcc
 }
 
 func (s *StateDB) AddLog(log *types.Log) {
+	if s.isSlotDB {
+		debug.Handler.LogWhenTracing("SlotIndex" + strconv.Itoa(s.SlotIndex) +
+			"StateDB.AddLog thash:" + s.thash.String() +
+			" log.Data:" + string(log.Data) + " log.Data:" + string(log.Data))
+		for index, t := range log.Topics {
+			debug.Handler.LogWhenTracing("SlotIndex" + strconv.Itoa(s.SlotIndex) +
+				" topic " + strconv.Itoa(index) +
+				" :" + t.String())
+		}
+	}
 	s.journal.append(addLogChange{txhash: s.thash})
 
 	log.TxHash = s.thash
@@ -562,6 +575,7 @@ func (s *StateDB) Empty(addr common.Address) bool {
 
 // GetBalance retrieves the balance from the given address or 0 if object not found
 func (s *StateDB) GetBalance(addr common.Address) *big.Int {
+	debug.Handler.LogWhenTracing("StateDB.GetBalance addr:" + addr.String())
 	if s.isSlotDB {
 		s.balanceReadsInSlot[addr] = struct{}{}
 		if addr == s.systemAddress {
@@ -577,6 +591,7 @@ func (s *StateDB) GetBalance(addr common.Address) *big.Int {
 }
 
 func (s *StateDB) GetNonce(addr common.Address) uint64 {
+	debug.Handler.LogWhenTracing("StateDB.GetNonce addr:" + addr.String())
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
 		return stateObject.Nonce()
@@ -620,6 +635,8 @@ func (s *StateDB) SystemAddressRedo() bool {
 }
 
 func (s *StateDB) GetCode(addr common.Address) []byte {
+	defer debug.Handler.StartRegionAuto("StateDB.GetCode")()
+	debug.Handler.LogWhenTracing("StateDB.GetCode addr:" + addr.String())
 	if s.isSlotDB {
 		s.codeReadInSlot[addr] = struct{}{}
 	}
@@ -636,6 +653,7 @@ func (s *StateDB) GetCode(addr common.Address) []byte {
 }
 
 func (s *StateDB) GetCodeSize(addr common.Address) int {
+	debug.Handler.LogWhenTracing("StateDB.GetCodeSize addr:" + addr.String())
 	if s.isSlotDB {
 		s.codeReadInSlot[addr] = struct{}{} // code size is part of code
 	}
@@ -648,6 +666,7 @@ func (s *StateDB) GetCodeSize(addr common.Address) int {
 }
 
 func (s *StateDB) GetCodeHash(addr common.Address) common.Hash {
+	debug.Handler.LogWhenTracing("StateDB.GetCodeHash addr:" + addr.String())
 	if s.isSlotDB {
 		s.codeReadInSlot[addr] = struct{}{} // code hash is part of code
 	}
@@ -661,6 +680,7 @@ func (s *StateDB) GetCodeHash(addr common.Address) common.Hash {
 
 // GetState retrieves a value from the given account's storage trie.
 func (s *StateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
+	debug.Handler.LogWhenTracing("StateDB.GetState addr:" + addr.String() + " hash:" + hash.String())
 	if s.isSlotDB {
 		if s.stateReadsInSlot[addr] == nil {
 			s.stateReadsInSlot[addr] = make(map[common.Hash]struct{}, defaultNumOfSlots)
@@ -757,6 +777,7 @@ func (s *StateDB) HasSuicided(addr common.Address) bool {
 
 // AddBalance adds amount to the account associated with addr.
 func (s *StateDB) AddBalance(addr common.Address, amount *big.Int) {
+	debug.Handler.LogWhenTracing("StateDB.AddBalance addr:" + addr.String() + " amount:" + amount.String())
 	if s.isSlotDB {
 		// just in case other tx creates this account, we will miss this if we only add this account when found
 		s.balanceChangedInSlot[addr] = struct{}{}
@@ -784,6 +805,7 @@ func (s *StateDB) AddBalance(addr common.Address, amount *big.Int) {
 
 // SubBalance subtracts amount from the account associated with addr.
 func (s *StateDB) SubBalance(addr common.Address, amount *big.Int) {
+	debug.Handler.LogWhenTracing("StateDB.SubBalance addr:" + addr.String() + " amount:" + amount.String())
 	if s.isSlotDB {
 		// just in case other tx creates this account, we will miss this if we only add this account when found
 		s.balanceChangedInSlot[addr] = struct{}{}
@@ -810,6 +832,7 @@ func (s *StateDB) SubBalance(addr common.Address, amount *big.Int) {
 }
 
 func (s *StateDB) SetBalance(addr common.Address, amount *big.Int) {
+	debug.Handler.LogWhenTracing("StateDB.SetBalance addr:" + addr.String() + " amount:" + amount.String())
 	stateObject := s.GetOrNewStateObject(addr)
 	if stateObject != nil {
 		if s.isSlotDB {
@@ -831,6 +854,7 @@ func (s *StateDB) SetBalance(addr common.Address, amount *big.Int) {
 }
 
 func (s *StateDB) SetNonce(addr common.Address, nonce uint64) {
+	debug.Handler.LogWhenTracing("StateDB.SetNonce addr:" + addr.String() + " nonce:" + strconv.Itoa(int(nonce)))
 	stateObject := s.GetOrNewStateObject(addr)
 	if stateObject != nil {
 		if s.isSlotDB {
@@ -848,6 +872,7 @@ func (s *StateDB) SetNonce(addr common.Address, nonce uint64) {
 }
 
 func (s *StateDB) SetCode(addr common.Address, code []byte) {
+	debug.Handler.LogWhenTracing("StateDB.SetCode addr:" + addr.String())
 	stateObject := s.GetOrNewStateObject(addr)
 	if stateObject != nil {
 		if s.isSlotDB {
@@ -867,6 +892,7 @@ func (s *StateDB) SetCode(addr common.Address, code []byte) {
 }
 
 func (s *StateDB) SetState(addr common.Address, key, value common.Hash) {
+	debug.Handler.LogWhenTracing("StateDB.SetState addr:" + addr.String() + " key:" + key.String())
 	stateObject := s.GetOrNewStateObject(addr)
 	if stateObject != nil {
 		if s.isSlotDB {
@@ -891,6 +917,13 @@ func (s *StateDB) SetState(addr common.Address, key, value common.Hash) {
 // SetStorage replaces the entire storage for the specified account with given
 // storage. This function should only be used for debugging.
 func (s *StateDB) SetStorage(addr common.Address, storage map[common.Hash]common.Hash) {
+	defer debug.Handler.StartRegionAuto("SetStorage")()
+	debug.Handler.LogWhenTracing("StateDB.SetStorage addr:" + addr.String())
+
+	for key, value := range storage {
+		debug.Handler.LogWhenTracing("key" + key.String() + " value:" + value.String())
+	}
+
 	stateObject := s.GetOrNewStateObject(addr)
 	if stateObject != nil {
 		stateObject.SetStorage(storage)
@@ -903,6 +936,7 @@ func (s *StateDB) SetStorage(addr common.Address, storage map[common.Hash]common
 // The account's state object is still available until the state is committed,
 // getStateObject will return a non-nil account after Suicide.
 func (s *StateDB) Suicide(addr common.Address) bool {
+	debug.Handler.LogWhenTracing("StateDB.Suicide addr:" + addr.String())
 	stateObject := s.getStateObject(addr)
 	// fixme: should add read stateobject record
 	if stateObject == nil {
@@ -974,8 +1008,8 @@ func (s *StateDB) getStateObject(addr common.Address) *StateObject {
 }
 
 func (s *StateDB) TryPreload(block *types.Block, signer types.Signer) {
-	accounts := make(map[common.Address]bool, block.Transactions().Len())
-	accountsSlice := make([]common.Address, 0, block.Transactions().Len())
+	accounts := make(map[common.Address]bool, block.Transactions().Len())  // better len*2, since from & to
+	accountsSlice := make([]common.Address, 0, block.Transactions().Len()) // better len*2, since from & to
 	for _, tx := range block.Transactions() {
 		from, err := types.Sender(signer, tx)
 		if err != nil {
@@ -1213,6 +1247,8 @@ func (s *StateDB) ForEachStorage(addr common.Address, cb func(key, value common.
 // Copy creates a deep, independent copy of the state.
 // Snapshots of the copied state cannot be applied to the copy.
 func (s *StateDB) Copy() *StateDB {
+	traceMsg := "StateDB Copy"
+	defer debug.Handler.StartRegionAuto(traceMsg)()
 	// Copy all the basic fields, initialize the memory ones
 	state := &StateDB{
 		db:                  s.db,
@@ -1484,6 +1520,7 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 // It is called in between transactions to get the root hash that
 // goes into transaction receipts.
 func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
+	defer debug.Handler.StartRegionAuto("StateDB.IntermediateRoot")()
 	if s.lightProcessed {
 		s.StopPrefetcher()
 		return s.trie.Hash()
@@ -1747,6 +1784,7 @@ func (s *StateDB) LightCommit() (common.Hash, *types.DiffLayer, error) {
 
 // Commit writes the state to the underlying in-memory trie database.
 func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() error) (common.Hash, *types.DiffLayer, error) {
+	defer debug.Handler.StartRegionAuto("StateDB.Commit")()
 	if s.dbErr != nil {
 		return common.Hash{}, nil, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
 	}
@@ -2033,6 +2071,7 @@ func (s *StateDB) SnapToDiffLayer() ([]common.Address, []types.DiffAccount, []ty
 //
 // This method should only be called if Yolov3/Berlin/2929+2930 is applicable at the current number.
 func (s *StateDB) PrepareAccessList(sender common.Address, dst *common.Address, precompiles []common.Address, list types.AccessList) {
+	defer debug.Handler.StartRegionAuto("StateDB.PrepareAccessList")()
 	s.AddAddressToAccessList(sender)
 	if dst != nil {
 		s.AddAddressToAccessList(*dst)
