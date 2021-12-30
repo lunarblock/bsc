@@ -190,6 +190,7 @@ func (s *StateObject) GetState(db Database, key common.Hash) common.Hash {
 	// If we have a dirty value for this state entry, return it
 	value, dirty := s.dirtyStorage[key]
 	if dirty {
+		// log.Info("StateObject GetState dirty", "value", value)
 		return value
 	}
 	// Otherwise return the entry's original value
@@ -204,9 +205,11 @@ func (s *StateObject) GetCommittedState(db Database, key common.Hash) common.Has
 	}
 	// If we have a pending write or clean cached, return that
 	if value, pending := s.pendingStorage[key]; pending {
+		// log.Info("StateObject GetCommittedState pendingStorage", "value", value)
 		return value
 	}
 	if value, cached := s.originStorage[key]; cached {
+		// log.Info("StateObject GetCommittedState originStorage", "value", value)
 		return value
 	}
 	// If no live objects are available, attempt to use snapshots
@@ -253,9 +256,11 @@ func (s *StateObject) GetCommittedState(db Database, key common.Hash) common.Has
 			meter = &s.db.StorageReads
 		}
 		if enc, err = s.getTrie(db).TryGet(key.Bytes()); err != nil {
+			// log.Info("StateObject GetCommittedState get from getTrie fail", "error", err)
 			s.setError(err)
 			return common.Hash{}
 		}
+		// log.Info("StateObject GetCommittedState get from getTrie")
 	}
 	var value common.Hash
 	if len(enc) > 0 {
@@ -265,6 +270,7 @@ func (s *StateObject) GetCommittedState(db Database, key common.Hash) common.Has
 		}
 		value.SetBytes(content)
 	}
+	// log.Info("StateObject GetCommittedState return", "key", key, "value", value)
 	s.originStorage[key] = value
 	return value
 }
@@ -333,6 +339,7 @@ func (s *StateObject) finalise(prefetch bool) {
 // updateTrie writes cached storage modifications into the object's storage trie.
 // It will return nil if the trie has not been loaded and no changes have been made
 func (s *StateObject) updateTrie(db Database) Trie {
+	// log.Info("StateObject updateTrie", "Addr", s.address, "len(s.pendingStorage)", len(s.pendingStorage))
 	// Make sure all dirty slots are finalized into the pending storage area
 	s.finalise(false) // Don't prefetch any more, pull directly if need be
 	if len(s.pendingStorage) == 0 {
@@ -353,6 +360,7 @@ func (s *StateObject) updateTrie(db Database) Trie {
 
 	usedStorage := make([][]byte, 0, len(s.pendingStorage))
 	for key, value := range s.pendingStorage {
+		// log.Info("StateObject updateTrie pendingStorage", "key", key, "value", value)
 		// Skip noop changes, persist actual changes
 		if value == s.originStorage[key] {
 			continue
