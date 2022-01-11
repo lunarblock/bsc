@@ -106,8 +106,8 @@ type StateDB struct {
 
 	// for parallel slot to do conflict check,
 	// each slot would have a stateObjects: map[common.Address]*StateObject
-	BaseTxIndex          int                        // slotDB is created base on this tx index.
-	StateChangedInSlot   map[common.Address]Storage // fixme no need record value?
+	BaseTxIndex          int                          // slotDB is created base on this tx index.
+	StateChangedInSlot   map[common.Address]StateKeys // no need record value
 	StateReadsInSlot     map[common.Address]StateKeys
 	BalanceChangedInSlot map[common.Address]struct{} // the address's balance has been changed
 	BalanceReadsInSlot   map[common.Address]struct{} // the address's balance has been read and used.
@@ -172,13 +172,29 @@ func NewSlotDB(db *StateDB, validatorSetAddr common.Address, txIndex int) *State
 	return slotDB
 }
 
+// to avoid new slotDB for each Tx, slotDB should be valid and merged
+func ReUseSlotDB(slotDB *StateDB, validatorSetAddr common.Address) *StateDB {
+	log.Debug("ReUseSlotDB")
+	slotDB.SetBalance(validatorSetAddr, big.NewInt(0))
+	slotDB.logs = make(map[common.Hash][]*types.Log, defaultNumOfSlots)
+	slotDB.logSize = 0
+	slotDB.StateChangedInSlot = make(map[common.Address]StateKeys, defaultNumOfSlots)
+	slotDB.StateReadsInSlot = make(map[common.Address]StateKeys, defaultNumOfSlots)
+	slotDB.BalanceChangedInSlot = make(map[common.Address]struct{}, defaultNumOfSlots)
+	slotDB.BalanceReadsInSlot = make(map[common.Address]struct{}, defaultNumOfSlots)
+	slotDB.stateObjectsDirty = make(map[common.Address]struct{}, defaultNumOfSlots)
+	slotDB.stateObjectsPending = make(map[common.Address]struct{}, defaultNumOfSlots)
+
+	return slotDB
+}
+
 func newStateDB(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, error) {
 	sdb := &StateDB{
 		db:                   db,
 		originalRoot:         root,
 		snaps:                snaps,
 		stateObjects:         make(map[common.Address]*StateObject, defaultNumOfSlots),
-		StateChangedInSlot:   make(map[common.Address]Storage, defaultNumOfSlots),
+		StateChangedInSlot:   make(map[common.Address]StateKeys, defaultNumOfSlots),
 		StateReadsInSlot:     make(map[common.Address]StateKeys, defaultNumOfSlots),
 		BalanceChangedInSlot: make(map[common.Address]struct{}, defaultNumOfSlots),
 		BalanceReadsInSlot:   make(map[common.Address]struct{}, defaultNumOfSlots),
@@ -210,14 +226,14 @@ func newStateDB(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, 
 // MergeSlotDB is for Parallel TX, when the TX is finalized(dirty -> pending)
 // A bit similar to StateDB.Copy(),
 // mainly copy stateObjects, since slotDB has been finalized.
-func (s *StateDB) MergeSlotDB(slotDb *StateDB, slotReceipt *types.Receipt, validorSetAddr common.Address) {
+func (s *StateDB) MergeSlotDB(slotDb *StateDB, slotReceipt *types.Receipt, validorSetAddr common.Address) (map[common.Address]StateKeys, map[common.Address]struct{}) {
 	// receipt.Logs with unified log Index within a block
 	// align slotDB's logs Index to the block stateDB's logSize
 	for _, l := range slotReceipt.Logs {
 		l.Index += s.logSize
 	}
 	s.logSize += slotDb.logSize
-	// log.Info("MergeSlotDB", "s.logSize", s.logSize, "slotDb.logSize", slotDb.logSize)
+	log.Debug("MergeSlotDB", "s.logSize", s.logSize, "slotDb.logSize", slotDb.logSize)
 
 	// before merge, do validator reward first: AddBalance to consensus.SystemAddress
 	// object of SystemAddress is take care specially
@@ -304,6 +320,16 @@ func (s *StateDB) MergeSlotDB(slotDb *StateDB, slotReceipt *types.Receipt, valid
 			s.snapStorage[k] = temp
 		}
 	}
+
+	stateChanges := make(map[common.Address]StateKeys, len(slotDb.StateChangedInSlot)) // must be a deep copy, since
+	for addr, storage := range slotDb.StateChangedInSlot {
+		stateChanges[addr] = storage
+	}
+	balanceChanges := make(map[common.Address]struct{}, len(slotDb.BalanceChangedInSlot)) // must be a deep copy, since
+	for addr := range slotDb.BalanceChangedInSlot {
+		balanceChanges[addr] = struct{}{}
+	}
+	return stateChanges, balanceChanges
 }
 
 // StartPrefetcher initializes a new trie prefetcher to pull in nodes from the
@@ -652,9 +678,9 @@ func (s *StateDB) SetState(addr common.Address, key, value common.Hash) {
 		stateObject.SetState(s.db, key, value)
 	}
 	if s.StateChangedInSlot[addr] == nil {
-		s.StateChangedInSlot[addr] = make(Storage, defaultNumOfSlots)
+		s.StateChangedInSlot[addr] = make(StateKeys, defaultNumOfSlots)
 	}
-	s.StateChangedInSlot[addr][key] = value
+	s.StateChangedInSlot[addr][key] = struct{}{}
 
 }
 
@@ -1082,7 +1108,7 @@ func (s *StateDB) CopyForSlot() *StateDB {
 		snapDestructs:        make(map[common.Address]struct{}),
 		snapAccounts:         make(map[common.Address][]byte),
 		snapStorage:          make(map[common.Address]map[string][]byte),
-		StateChangedInSlot:   make(map[common.Address]Storage, defaultNumOfSlots),
+		StateChangedInSlot:   make(map[common.Address]StateKeys, defaultNumOfSlots),
 		StateReadsInSlot:     make(map[common.Address]StateKeys, defaultNumOfSlots),
 		BalanceChangedInSlot: make(map[common.Address]struct{}, defaultNumOfSlots),
 		BalanceReadsInSlot:   make(map[common.Address]struct{}, defaultNumOfSlots),
