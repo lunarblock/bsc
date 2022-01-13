@@ -905,7 +905,7 @@ func (p *StateProcessor) InitParallelOnce() {
 	for i := 0; i < state.ParallelExecNum; i++ {
 		p.slotState[i] = new(SlotState)
 		p.slotState[i].slotdbChan = make(chan *state.StateDB, 1)
-		p.slotState[i].pendingExec = make(chan *ParallelTxRequest, maxPendingQueueSize)
+		p.slotState[i].pendingExec = make(chan *ParallelTxRequest, MaxPendingQueueSize)
 
 		wg.Add(1)
 		// start the slot's goroutine
