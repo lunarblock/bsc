@@ -25,7 +25,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -140,18 +139,15 @@ func newObject(db *StateDB, address common.Address, data Account) *StateObject {
 func (s *StateObject) MergeStateObject(obj *StateObject, slotDB *StateDB) {
 	// tx Stage2, StateDB.Finalise() -> StateObject.finalise() will flush dirtyStorage to pendingStorage?
 	// so len(dirtyStorage) should be 0
-	log.Info("StateObject.MergeStateObject, dirtyStorage", "actual len(dirtyStorage)", len(obj.originStorage))
 	for key, val := range obj.dirtyStorage {
 		s.dirtyStorage[key] = val
 	}
 
-	log.Info("StateObject.MergeStateObject, pendingStorage", "actual len(pendingStorage)", len(obj.pendingStorage))
 	for key, val := range obj.pendingStorage {
 		s.pendingStorage[key] = val
 	}
 
 	// originStorage will be update when StateDB.Commit, to do Trie update.
-	log.Info("StateObject.MergeStateObject, originStorage", "actual len(originStorage)", len(obj.originStorage))
 	for key, val := range obj.originStorage {
 		s.originStorage[key] = val
 	}
@@ -523,6 +519,14 @@ func (s *StateObject) deepCopy(db *StateDB) *StateObject {
 	stateObject.dirtyCode = s.dirtyCode
 	stateObject.deleted = s.deleted
 	return stateObject
+}
+
+func (s *StateObject) deepCopyForSlot(db *StateDB) *StateObject {
+	s.db = db
+	if s.trie != nil {
+		s.trie = db.db.CopyTrie(s.trie)
+	}
+	return s
 }
 
 //
