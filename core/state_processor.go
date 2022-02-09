@@ -607,7 +607,7 @@ func (p *StateProcessor) queueToSameAddress(execMsg *ParallelTxRequest) bool {
 
 		// To() == nil means contract creation, won't queue to such slot.
 		if slot.tailTxReq.tx.To() == nil {
-			// log.Debug("queueToSameAddress, slot's To address is nil", "slotIndex", i)
+			// log.Debug("queueToSameAddress, slot's To address is nil", "Slot", i)
 			continue
 		}
 		// same to address, put it on slot's pending list.
@@ -615,10 +615,10 @@ func (p *StateProcessor) queueToSameAddress(execMsg *ParallelTxRequest) bool {
 			select {
 			case slot.pendingExec <- execMsg:
 				slot.tailTxReq = execMsg
-				log.Debug("queueToSameAddress", "slotIndex", i, "txIndex", execMsg.txIndex)
+				log.Debug("queueToSameAddress", "Slot", i, "txIndex", execMsg.txIndex)
 				return true
 			default:
-				log.Debug("queueToSameAddress but queue is full", "slotIndex", i, "txIndex", execMsg.txIndex)
+				log.Debug("queueToSameAddress but queue is full", "Slot", i, "txIndex", execMsg.txIndex)
 				return false
 			}
 		}
@@ -634,7 +634,7 @@ func (p *StateProcessor) dispatchToIdleSlot(statedb *state.StateDB, txReq *Paral
 			if len(slot.mergedTxInfo) == 0 {
 				txReq.slotDB = state.NewSlotDB(statedb, consensus.SystemAddress, p.mergedTxIndex, false)
 			}
-			log.Debug("dispatchToIdleSlot", "slotIndex", i, "txIndex", txReq.txIndex)
+			log.Debug("dispatchToIdleSlot", "Slot", i, "txIndex", txReq.txIndex)
 			slot.tailTxReq = txReq
 			slot.pendingExec <- txReq
 			return true
@@ -681,7 +681,7 @@ func (p *StateProcessor) waitUntilNextTxDone(statedb *state.StateDB) *ParallelTx
 	resultTxIndex := result.txIndex
 	resultSlotState := p.slotState[resultSlotIndex]
 	if resultSlotState.tailTxReq.txIndex == resultTxIndex {
-		log.Debug("ProcessParallel slot is idle", "slotIndex", resultSlotIndex)
+		log.Debug("ProcessParallel slot is idle", "Slot", resultSlotIndex)
 		resultSlotState.tailTxReq = nil
 	}
 
@@ -731,12 +731,12 @@ func (p *StateProcessor) execInParallelSlot(slotIndex int, txReq *ParallelTxRequ
 
 	// fixme: to optimize, reuse the slotDB
 	slotDB.Prepare(tx.Hash(), block.Hash(), txIndex)
-	log.Debug("execInParallelSlot enter", "slotIndex", slotIndex, "txIndex", txIndex, "slotDB.baseTxIndex", slotDB.BaseTxIndex())
+	log.Debug("execInParallelSlot enter", "Slot", slotIndex, "txIndex", txIndex, "slotDB.baseTxIndex", slotDB.BaseTxIndex())
 
 	slotGasLimit := gp.Gas()
 	gpSlot := new(GasPool).AddGas(slotGasLimit) // each slot would use its own gas pool, and will do gaslimit check later
 	evm, result, err = applyTransactionStageExecution(msg, gpSlot, slotDB, vmenv)
-	log.Debug("execInParallelSlot Stage Execution done", "slotIndex", slotIndex, "txIndex", txIndex, "slotDB.baseTxIndex", slotDB.BaseTxIndex())
+	log.Debug("execInParallelSlot Stage Execution done", "Slot", slotIndex, "txIndex", txIndex, "slotDB.baseTxIndex", slotDB.BaseTxIndex())
 
 	// wait until the previous tx is finalized.
 	if txReq.waitTxChan != nil {
@@ -752,7 +752,7 @@ func (p *StateProcessor) execInParallelSlot(slotIndex int, txReq *ParallelTxRequ
 	// in this case, we will do re-run.
 	if err != nil {
 		defer debug.Handler.StartRegionAuto("execInParallelSlot StageExecution err redo")()
-		log.Debug("Stage Execution err", "slotIndex", slotIndex, "txIndex", txIndex,
+		log.Debug("Stage Execution err", "Slot", slotIndex, "txIndex", txIndex,
 			"current slotDB.baseTxIndex", slotDB.BaseTxIndex(), "err", err)
 		redoResult := &ParallelTxResult{
 			redo:         true,
@@ -770,7 +770,7 @@ func (p *StateProcessor) execInParallelSlot(slotIndex int, txReq *ParallelTxRequ
 		slotDB.SlotIndex = slotIndex
 		slotDB.Prepare(tx.Hash(), block.Hash(), txIndex)
 		// vmenv.Reset(vm.TxContext{}, slotDB)
-		log.Debug("Stage Execution get new slotdb to redo", "slotIndex", slotIndex,
+		log.Debug("Stage Execution  get new slotdb to redo", "Slot", slotIndex,
 			"txIndex", txIndex, "new slotDB.baseTxIndex", slotDB.BaseTxIndex())
 		slotGasLimit = gp.Gas()
 		gpSlot = new(GasPool).AddGas(slotGasLimit)
@@ -788,7 +788,7 @@ func (p *StateProcessor) execInParallelSlot(slotIndex int, txReq *ParallelTxRequ
 	hasConflict := false
 	systemAddrConflict := false
 
-	log.Debug("execInParallelSlot Tx Stage Execution done, do conflict check", "slotIndex", slotIndex, "txIndex", txIndex)
+	log.Debug("execInParallelSlot Tx Stage Execution done, do conflict check", "Slot", slotIndex, "txIndex", txIndex)
 	if slotDB.SystemAddressRedo() {
 		hasConflict = true
 		systemAddrConflict = true
@@ -808,7 +808,7 @@ func (p *StateProcessor) execInParallelSlot(slotIndex int, txReq *ParallelTxRequ
 					continue
 				}
 				if p.hasStateConflict(slotDB, mergedInfo) {
-					log.Debug("execInParallelSlot Stage Execution conflict", "slotIndex", slotIndex,
+					log.Debug("execInParallelSlot Stage Execution conflict", "Slot", slotIndex,
 						"txIndex", txIndex, " conflict slot", index, "slotDB.baseTxIndex", slotDB.BaseTxIndex())
 					hasConflict = true
 					break
@@ -861,12 +861,12 @@ func (p *StateProcessor) execInParallelSlot(slotIndex int, txReq *ParallelTxRequ
 	}
 
 	log.Debug("execInParallelSlot ok to finalize this TX",
-		"slotIndex", slotIndex, "txIndex", txIndex, "result.UsedGas", result.UsedGas, "txReq.usedGas", *txReq.usedGas)
+		"Slot", slotIndex, "txIndex", txIndex, "result.UsedGas", result.UsedGas, "txReq.usedGas", *txReq.usedGas)
 	// ok, time to do finalize, this stage should not be parallel
 	receipt, err = applyTransactionStageFinalization(evm, result, msg, p.config, slotDB, header, tx, txReq.usedGas, bloomProcessors)
 	if result.Err != nil {
 		// if Tx is reverted, all its state change will be discarded
-		log.Debug("execInParallelSlot TX reverted?", "slotIndex", slotIndex, "txIndex", txIndex, "result.Err", result.Err)
+		log.Debug("execInParallelSlot TX reverted?", "Slot", slotIndex, "txIndex", txIndex, "result.Err", result.Err)
 	}
 	return &ParallelTxResult{
 		redo:         false,
@@ -888,7 +888,7 @@ func (p *StateProcessor) runSlotLoop(slotIndex int) {
 		// wait for new TxReq
 		txReq := <-curSlot.pendingExec
 		// receive a dispatched message
-		log.Debug("SlotLoop received a new TxReq", "slotIndex:", slotIndex, "txIndex", txReq.txIndex)
+		log.Debug("SlotLoop received a new TxReq", "Slot", slotIndex, "txIndex", txReq.txIndex)
 
 		// SlotDB create rational:
 		// ** for a dispatched tx,
@@ -944,7 +944,7 @@ func (p *StateProcessor) InitParallelOnce() {
 		go func(slotIndex int) {
 			wg.Done()
 			p.runSlotLoop(slotIndex) // this loop will be permanent live
-			log.Error("runSlotLoop exit!", "slotIndex", slotIndex)
+			log.Error("runSlotLoop exit!", "Slot", slotIndex)
 		}(i)
 	}
 	wg.Wait()
@@ -1116,7 +1116,10 @@ func applyTransaction(msg types.Message, config *params.ChainConfig, bc ChainCon
 	}
 	receipt.TxHash = tx.Hash()
 	receipt.GasUsed = result.UsedGas
-
+	if result.Err != nil {
+		debug.Handler.LogWhenTracing("applyTransaction " + tx.Hash().Hex() +
+			" result.Err:" + result.Err.Error())
+	}
 	// If the transaction created a contract, store the creation address in the receipt.
 	if msg.To() == nil {
 		receipt.ContractAddress = crypto.CreateAddress(evm.TxContext.Origin, tx.Nonce())

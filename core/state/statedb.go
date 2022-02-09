@@ -18,6 +18,7 @@
 package state
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -303,6 +304,9 @@ func (s *StateDB) getStateObjectFromStateObjects(addr common.Address) (*StateObj
 // mainly copy stateObjects, since slotDB has been finalized.
 // return: objSuicided, stateChanges, balanceChanges, codeChanges
 func (s *StateDB) MergeSlotDB(slotDb *StateDB, slotReceipt *types.Receipt) (map[common.Address]struct{}, map[common.Address]StateKeys, map[common.Address]struct{}, map[common.Address]struct{}, map[common.Address]struct{}) {
+	traceMsg := "MergeSlotDB"
+	defer debug.Handler.StartRegionAuto(traceMsg)()
+
 	// receipt.Logs with unified log Index within a block
 	// align slotDB's logs Index to the block stateDB's logSize
 	for _, l := range slotReceipt.Logs {
@@ -492,11 +496,11 @@ func (s *StateDB) SetSnapData(snapDestructs map[common.Address]struct{}, snapAcc
 
 func (s *StateDB) AddLog(log *types.Log) {
 	if s.isSlotDB {
-		debug.Handler.LogWhenTracing("SlotIndex" + strconv.Itoa(s.SlotIndex) +
-			"StateDB.AddLog thash:" + s.thash.String() +
-			" log.Data:" + string(log.Data) + " log.Data:" + string(log.Data))
+		debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+			" StateDB.AddLog thash:" + s.thash.String() + " len(Topics):" + strconv.Itoa(len(log.Topics)) +
+			" log.Data:" + hex.EncodeToString(log.Data))
 		for index, t := range log.Topics {
-			debug.Handler.LogWhenTracing("SlotIndex" + strconv.Itoa(s.SlotIndex) +
+			debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
 				" topic " + strconv.Itoa(index) +
 				" :" + t.String())
 		}
@@ -557,6 +561,8 @@ func (s *StateDB) SubRefund(gas uint64) {
 // Exist reports whether the given account address exists in the state.
 // Notably this also returns true for suicided accounts.
 func (s *StateDB) Exist(addr common.Address) bool {
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.Exist addr:" + addr.String())
 	if s.isSlotDB {
 		s.addrStateReadInSlot[addr] = struct{}{}
 	}
@@ -566,6 +572,9 @@ func (s *StateDB) Exist(addr common.Address) bool {
 // Empty returns whether the state object is either non-existent
 // or empty according to the EIP161 specification (balance = nonce = code = 0)
 func (s *StateDB) Empty(addr common.Address) bool {
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.Empty addr:" + addr.String())
+
 	so := s.getStateObject(addr)
 	if s.isSlotDB {
 		s.addrStateReadInSlot[addr] = struct{}{}
@@ -575,7 +584,8 @@ func (s *StateDB) Empty(addr common.Address) bool {
 
 // GetBalance retrieves the balance from the given address or 0 if object not found
 func (s *StateDB) GetBalance(addr common.Address) *big.Int {
-	debug.Handler.LogWhenTracing("StateDB.GetBalance addr:" + addr.String())
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.GetBalance addr:" + addr.String())
 	if s.isSlotDB {
 		s.balanceReadsInSlot[addr] = struct{}{}
 		if addr == s.systemAddress {
@@ -591,7 +601,8 @@ func (s *StateDB) GetBalance(addr common.Address) *big.Int {
 }
 
 func (s *StateDB) GetNonce(addr common.Address) uint64 {
-	debug.Handler.LogWhenTracing("StateDB.GetNonce addr:" + addr.String())
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.GetNonce addr:" + addr.String())
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
 		return stateObject.Nonce()
@@ -636,7 +647,8 @@ func (s *StateDB) SystemAddressRedo() bool {
 
 func (s *StateDB) GetCode(addr common.Address) []byte {
 	defer debug.Handler.StartRegionAuto("StateDB.GetCode")()
-	debug.Handler.LogWhenTracing("StateDB.GetCode addr:" + addr.String())
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.GetCode addr:" + addr.String())
 	if s.isSlotDB {
 		s.codeReadInSlot[addr] = struct{}{}
 	}
@@ -653,7 +665,8 @@ func (s *StateDB) GetCode(addr common.Address) []byte {
 }
 
 func (s *StateDB) GetCodeSize(addr common.Address) int {
-	debug.Handler.LogWhenTracing("StateDB.GetCodeSize addr:" + addr.String())
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.GetCodeSize addr:" + addr.String())
 	if s.isSlotDB {
 		s.codeReadInSlot[addr] = struct{}{} // code size is part of code
 	}
@@ -666,7 +679,8 @@ func (s *StateDB) GetCodeSize(addr common.Address) int {
 }
 
 func (s *StateDB) GetCodeHash(addr common.Address) common.Hash {
-	debug.Handler.LogWhenTracing("StateDB.GetCodeHash addr:" + addr.String())
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.GetCodeHash addr:" + addr.String())
 	if s.isSlotDB {
 		s.codeReadInSlot[addr] = struct{}{} // code hash is part of code
 	}
@@ -680,7 +694,8 @@ func (s *StateDB) GetCodeHash(addr common.Address) common.Hash {
 
 // GetState retrieves a value from the given account's storage trie.
 func (s *StateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
-	debug.Handler.LogWhenTracing("StateDB.GetState addr:" + addr.String() + " hash:" + hash.String())
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.GetState addr:" + addr.String() + " hash:" + hash.String())
 	if s.isSlotDB {
 		if s.stateReadsInSlot[addr] == nil {
 			s.stateReadsInSlot[addr] = make(map[common.Hash]struct{}, defaultNumOfSlots)
@@ -760,6 +775,8 @@ func (s *StateDB) StorageTrie(addr common.Address) Trie {
 }
 
 func (s *StateDB) HasSuicided(addr common.Address) bool {
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.HasSuicided addr:" + addr.String())
 	stateObject := s.getStateObject(addr)
 
 	if s.isSlotDB {
@@ -777,7 +794,8 @@ func (s *StateDB) HasSuicided(addr common.Address) bool {
 
 // AddBalance adds amount to the account associated with addr.
 func (s *StateDB) AddBalance(addr common.Address, amount *big.Int) {
-	debug.Handler.LogWhenTracing("StateDB.AddBalance addr:" + addr.String() + " amount:" + amount.String())
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.AddBalance addr:" + addr.String() + " amount:" + amount.String())
 	if s.isSlotDB {
 		// just in case other tx creates this account, we will miss this if we only add this account when found
 		s.balanceChangedInSlot[addr] = struct{}{}
@@ -805,7 +823,8 @@ func (s *StateDB) AddBalance(addr common.Address, amount *big.Int) {
 
 // SubBalance subtracts amount from the account associated with addr.
 func (s *StateDB) SubBalance(addr common.Address, amount *big.Int) {
-	debug.Handler.LogWhenTracing("StateDB.SubBalance addr:" + addr.String() + " amount:" + amount.String())
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.SubBalance addr:" + addr.String() + " amount:" + amount.String())
 	if s.isSlotDB {
 		// just in case other tx creates this account, we will miss this if we only add this account when found
 		s.balanceChangedInSlot[addr] = struct{}{}
@@ -832,7 +851,8 @@ func (s *StateDB) SubBalance(addr common.Address, amount *big.Int) {
 }
 
 func (s *StateDB) SetBalance(addr common.Address, amount *big.Int) {
-	debug.Handler.LogWhenTracing("StateDB.SetBalance addr:" + addr.String() + " amount:" + amount.String())
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.SetBalance addr:" + addr.String() + " amount:" + amount.String())
 	stateObject := s.GetOrNewStateObject(addr)
 	if stateObject != nil {
 		if s.isSlotDB {
@@ -854,7 +874,8 @@ func (s *StateDB) SetBalance(addr common.Address, amount *big.Int) {
 }
 
 func (s *StateDB) SetNonce(addr common.Address, nonce uint64) {
-	debug.Handler.LogWhenTracing("StateDB.SetNonce addr:" + addr.String() + " nonce:" + strconv.Itoa(int(nonce)))
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.SetNonce addr:" + addr.String() + " nonce:" + strconv.Itoa(int(nonce)))
 	stateObject := s.GetOrNewStateObject(addr)
 	if stateObject != nil {
 		if s.isSlotDB {
@@ -872,7 +893,8 @@ func (s *StateDB) SetNonce(addr common.Address, nonce uint64) {
 }
 
 func (s *StateDB) SetCode(addr common.Address, code []byte) {
-	debug.Handler.LogWhenTracing("StateDB.SetCode addr:" + addr.String())
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.SetCode addr:" + addr.String())
 	stateObject := s.GetOrNewStateObject(addr)
 	if stateObject != nil {
 		if s.isSlotDB {
@@ -892,7 +914,8 @@ func (s *StateDB) SetCode(addr common.Address, code []byte) {
 }
 
 func (s *StateDB) SetState(addr common.Address, key, value common.Hash) {
-	debug.Handler.LogWhenTracing("StateDB.SetState addr:" + addr.String() + " key:" + key.String())
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.SetState addr:" + addr.String() + " key:" + key.String())
 	stateObject := s.GetOrNewStateObject(addr)
 	if stateObject != nil {
 		if s.isSlotDB {
@@ -918,10 +941,11 @@ func (s *StateDB) SetState(addr common.Address, key, value common.Hash) {
 // storage. This function should only be used for debugging.
 func (s *StateDB) SetStorage(addr common.Address, storage map[common.Hash]common.Hash) {
 	defer debug.Handler.StartRegionAuto("SetStorage")()
-	debug.Handler.LogWhenTracing("StateDB.SetStorage addr:" + addr.String())
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.SetStorage addr:" + addr.String())
 
 	for key, value := range storage {
-		debug.Handler.LogWhenTracing("key" + key.String() + " value:" + value.String())
+		debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) + " key" + key.String() + " value:" + value.String())
 	}
 
 	stateObject := s.GetOrNewStateObject(addr)
@@ -936,7 +960,8 @@ func (s *StateDB) SetStorage(addr common.Address, storage map[common.Hash]common
 // The account's state object is still available until the state is committed,
 // getStateObject will return a non-nil account after Suicide.
 func (s *StateDB) Suicide(addr common.Address) bool {
-	debug.Handler.LogWhenTracing("StateDB.Suicide addr:" + addr.String())
+	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+		" StateDB.Suicide addr:" + addr.String())
 	stateObject := s.getStateObject(addr)
 	// fixme: should add read stateobject record
 	if stateObject == nil {
