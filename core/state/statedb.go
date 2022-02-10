@@ -350,6 +350,7 @@ func (s *StateDB) MergeSlotDB(slotDb *StateDB, slotReceipt *types.Receipt, txInd
 		}
 
 		if addr == systemAddress {
+
 			continue
 		}
 
@@ -554,6 +555,7 @@ func (s *StateDB) Logs() []*types.Log {
 
 // AddPreimage records a SHA3 preimage seen by the VM.
 func (s *StateDB) AddPreimage(hash common.Hash, preimage []byte) {
+	log.Warn("StateDB.AddPreimage", "slot", s.SlotIndex, "hash", hash.Hex())
 	if _, ok := s.preimages[hash]; !ok {
 		s.journal.append(addPreimageChange{hash: hash})
 		pi := make([]byte, len(preimage))
