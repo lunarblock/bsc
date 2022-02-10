@@ -562,8 +562,8 @@ func (s *StateDB) Empty(addr common.Address) bool {
 
 // GetBalance retrieves the balance from the given address or 0 if object not found
 func (s *StateDB) GetBalance(addr common.Address) *big.Int {
-	s.balanceReadsInSlot[addr] = struct{}{}
 	if s.isSlotDB {
+		s.balanceReadsInSlot[addr] = struct{}{}
 		if addr == s.systemAddress {
 			s.systemAddressCount++
 		}
@@ -636,7 +636,9 @@ func (s *StateDB) GetCode(addr common.Address) []byte {
 }
 
 func (s *StateDB) GetCodeSize(addr common.Address) int {
-	s.codeReadInSlot[addr] = struct{}{} // code size is part of code
+	if s.isSlotDB {
+		s.codeReadInSlot[addr] = struct{}{} // code size is part of code
+	}
 
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -646,7 +648,9 @@ func (s *StateDB) GetCodeSize(addr common.Address) int {
 }
 
 func (s *StateDB) GetCodeHash(addr common.Address) common.Hash {
-	s.codeReadInSlot[addr] = struct{}{} // code hash is part of code
+	if s.isSlotDB {
+		s.codeReadInSlot[addr] = struct{}{} // code hash is part of code
+	}
 
 	stateObject := s.getStateObject(addr)
 	if stateObject == nil {
