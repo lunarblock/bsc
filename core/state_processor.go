@@ -953,7 +953,6 @@ func (p *StateProcessor) InitParallelOnce() {
 
 func (p *StateProcessor) ProcessParallel(block *types.Block, statedb *state.StateDB, cfg vm.Config) (*state.StateDB, types.Receipts, []*types.Log, uint64, error) {
 	p.InitParallelOnce()
-	log.Info("ProcessParallel", "block num", block.Number())
 	var (
 		usedGas = new(uint64)
 		header  = block.Header()
