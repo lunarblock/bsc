@@ -672,9 +672,9 @@ func (s *StateDB) SystemAddressRedo() bool {
 }
 
 func (s *StateDB) GetCode(addr common.Address) []byte {
-	defer debug.Handler.StartRegionAuto("StateDB.GetCode")()
-	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
-		" StateDB.GetCode addr:" + addr.String())
+	// defer debug.Handler.StartRegionAuto("StateDB.GetCode")()
+	// debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
+	//  " StateDB.GetCode addr:" + addr.String())
 	if s.parallel.isSlotDB {
 		s.parallel.codeReadInSlot[addr] = struct{}{}
 	}
