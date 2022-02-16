@@ -716,6 +716,8 @@ func (s *StateDB) GetCodeHash(addr common.Address) common.Hash {
 
 // GetState retrieves a value from the given account's storage trie.
 func (s *StateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
+	traceMsg := "StateDB.GetState"
+	defer debug.Handler.StartRegionAuto(traceMsg)()
 	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
 		" StateDB.GetState addr:" + addr.String() + " hash:" + hash.String())
 	if s.parallel.isSlotDB {
@@ -937,6 +939,9 @@ func (s *StateDB) SetCode(addr common.Address, code []byte) {
 func (s *StateDB) SetState(addr common.Address, key, value common.Hash) {
 	debug.Handler.LogWhenTracing("Slot=" + strconv.Itoa(s.SlotIndex) +
 		" StateDB.SetState addr:" + addr.String() + " key:" + key.String())
+	traceMsg := "StateDB.SetState"
+	defer debug.Handler.StartRegionAuto(traceMsg)()
+
 	stateObject := s.GetOrNewStateObject(addr)
 	if stateObject != nil {
 		if s.parallel.isSlotDB {
