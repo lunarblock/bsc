@@ -495,6 +495,25 @@ func (s *StateObject) deepCopyForSlot(db *StateDB) *StateObject {
 	return s
 }
 
+func (s *StateObject) deepCopyForSlotMerge(db *StateDB, originalObj *StateObject) *StateObject {
+	for k, _ := range originalObj.originStorage {
+		if _, ok := s.originStorage[k]; !ok {
+			s.SetState(s.db.db, k, originalObj.GetState(originalObj.db.db, k))
+		}
+	}
+
+	s.db = db
+	return s
+}
+
+func (s *StateObject) MergeSlotObject(db Database, dirtyObjs *StateObject, keys StateKeys) {
+	for key := range keys {
+		// better to do s.GetState(db, key) to load originStorage for this key?
+		// since originStorage was in dirtyObjs, but it works even originStorage miss the state object.
+		s.SetState(db, key, dirtyObjs.GetState(db, key))
+	}
+}
+
 //
 // Attribute accessors
 //

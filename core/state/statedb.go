@@ -340,7 +340,11 @@ func (s *StateDB) MergeSlotDB(slotDb *StateDB, slotReceipt *types.Receipt, txInd
 
 		// stateObjects: KV, balance, nonce...
 		if obj, ok := slotDb.getStateObjectFromStateObjects(addr); ok {
-			s.stateObjects.StoreStateObject(addr, obj.deepCopyForSlot(s))
+			if originalObj, exist := s.stateObjects.LoadStateObject(addr); !exist {
+				s.stateObjects.StoreStateObject(addr, obj.deepCopyForSlot(s))
+			} else {
+				s.stateObjects.StoreStateObject(addr, obj.deepCopyForSlotMerge(s, originalObj))
+			}
 		}
 	}
 
@@ -778,7 +782,9 @@ func (s *StateDB) HasSuicided(addr common.Address) bool {
 func (s *StateDB) AddBalance(addr common.Address, amount *big.Int) {
 	if s.parallel.isSlotDB {
 		// just in case other tx creates this account, we will miss this if we only add this account when found
-		s.parallel.balanceChangedInSlot[addr] = struct{}{}
+		if amount.Sign() != 0 {
+			s.parallel.balanceChangedInSlot[addr] = struct{}{}
+		}
 		s.parallel.balanceReadsInSlot[addr] = struct{}{} // add balance will perform a read operation first
 		if addr == s.parallel.systemAddress {
 			s.parallel.systemAddressCount++
@@ -805,8 +811,11 @@ func (s *StateDB) AddBalance(addr common.Address, amount *big.Int) {
 func (s *StateDB) SubBalance(addr common.Address, amount *big.Int) {
 	if s.parallel.isSlotDB {
 		// just in case other tx creates this account, we will miss this if we only add this account when found
-		s.parallel.balanceChangedInSlot[addr] = struct{}{}
-		s.parallel.balanceReadsInSlot[addr] = struct{}{}
+		if amount.Sign() != 0 {
+			s.parallel.balanceChangedInSlot[addr] = struct{}{}
+			// unlike add, sub 0 balance will not touch empty object
+			s.parallel.balanceReadsInSlot[addr] = struct{}{}
+		}
 		if addr == s.parallel.systemAddress {
 			s.parallel.systemAddressCount++
 		}
