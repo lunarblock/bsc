@@ -1062,6 +1062,12 @@ func (s *StateDB) AccountsIntermediateRoot() {
 					s.snapAccounts[obj.address] = snapshot.SlimAccountRLP(obj.data.Nonce, obj.data.Balance, obj.data.Root, obj.data.CodeHash)
 					s.snapMux.Unlock()
 				}
+				log.Info("AccountsIntermediateRoot", "addr", obj.address,
+					"deleted", obj.deleted,
+					"balance", obj.data.Balance,
+					"nonce", obj.data.Nonce,
+					"root", obj.data.Root,
+					"codeHash", obj.data.CodeHash)
 				data, err := rlp.EncodeToBytes(obj)
 				if err != nil {
 					panic(fmt.Errorf("can't encode object at %x: %v", addr[:], err))
