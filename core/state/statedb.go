@@ -1470,6 +1470,10 @@ var snapStoragePool = sync.Pool{
 	New: func() interface{} { return make(map[common.Address]map[string][]byte, defaultNumOfSlots) },
 }
 
+var snapStorageValuePool = sync.Pool{
+	New: func() interface{} { return make(map[string][]byte, defaultNumOfSlots) },
+}
+
 func (s *StateDB) SlotDBPutSyncPool() {
 	for key := range s.parallel.stateObjectsSuicidedInSlot {
 		delete(s.parallel.stateObjectsSuicidedInSlot, key)
@@ -1547,7 +1551,11 @@ func (s *StateDB) SlotDBPutSyncPool() {
 	}
 	snapAccountPool.Put(s.snapAccounts)
 
-	for key := range s.snapStorage {
+	for key, storage := range s.snapStorage {
+		for key := range storage {
+			delete(storage, key)
+		}
+		snapStorageValuePool.Put(storage)
 		delete(s.snapStorage, key)
 	}
 	snapStoragePool.Put(s.snapStorage)
@@ -1611,7 +1619,7 @@ func (s *StateDB) CopyForSlot() *StateDB {
 		}
 		state.snapStorage = snapStoragePool.Get().(map[common.Address]map[string][]byte)
 		for k, v := range s.snapStorage {
-			temp := make(map[string][]byte)
+			temp := snapStorageValuePool.Get().(map[string][]byte)
 			for kk, vv := range v {
 				temp[kk] = vv
 			}
