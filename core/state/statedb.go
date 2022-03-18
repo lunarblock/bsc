@@ -1462,6 +1462,14 @@ var stateObjectsPool = sync.Pool{
 	New: func() interface{} { return make(map[common.Address]*StateObject, defaultNumOfSlots) },
 }
 
+var snapAccountPool = sync.Pool{
+	New: func() interface{} { return make(map[common.Address][]byte, defaultNumOfSlots) },
+}
+
+var snapStoragePool = sync.Pool{
+	New: func() interface{} { return make(map[common.Address]map[string][]byte, defaultNumOfSlots) },
+}
+
 func (s *StateDB) SlotDBPutSyncPool() {
 	for key := range s.parallel.stateObjectsSuicidedInSlot {
 		delete(s.parallel.stateObjectsSuicidedInSlot, key)
@@ -1528,6 +1536,21 @@ func (s *StateDB) SlotDBPutSyncPool() {
 		delete(s.parallel.dirtiedStateObjectsInSlot, key)
 	}
 	stateObjectsPool.Put(s.parallel.dirtiedStateObjectsInSlot)
+
+	for key := range s.snapDestructs {
+		delete(s.snapDestructs, key)
+	}
+	addressStructPool.Put(s.snapDestructs)
+
+	for key := range s.snapAccounts {
+		delete(s.snapAccounts, key)
+	}
+	snapAccountPool.Put(s.snapAccounts)
+
+	for key := range s.snapStorage {
+		delete(s.snapStorage, key)
+	}
+	snapStoragePool.Put(s.snapStorage)
 }
 
 // Copy all the basic fields, initialize the memory ones
@@ -1561,9 +1584,6 @@ func (s *StateDB) CopyForSlot() *StateDB {
 		preimages:           make(map[common.Hash][]byte, len(s.preimages)),
 		journal:             journalPool.Get().(*journal),
 		hasher:              crypto.NewKeccakState(),
-		snapDestructs:       make(map[common.Address]struct{}),
-		snapAccounts:        make(map[common.Address][]byte),
-		snapStorage:         make(map[common.Address]map[string][]byte),
 		isParallel:          true,
 		parallel:            parallel,
 	}
@@ -1580,16 +1600,16 @@ func (s *StateDB) CopyForSlot() *StateDB {
 		state.snaps = s.snaps
 		state.snap = s.snap
 		// deep copy needed
-		state.snapDestructs = make(map[common.Address]struct{})
+		state.snapDestructs = addressStructPool.Get().(map[common.Address]struct{})
 		for k, v := range s.snapDestructs {
 			state.snapDestructs[k] = v
 		}
 		//
-		state.snapAccounts = make(map[common.Address][]byte)
+		state.snapAccounts = snapAccountPool.Get().(map[common.Address][]byte)
 		for k, v := range s.snapAccounts {
 			state.snapAccounts[k] = v
 		}
-		state.snapStorage = make(map[common.Address]map[string][]byte)
+		state.snapStorage = snapStoragePool.Get().(map[common.Address]map[string][]byte)
 		for k, v := range s.snapStorage {
 			temp := make(map[string][]byte)
 			for kk, vv := range v {
