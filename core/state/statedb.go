@@ -1474,6 +1474,10 @@ var snapStorageValuePool = sync.Pool{
 	New: func() interface{} { return make(map[string][]byte, defaultNumOfSlots) },
 }
 
+var logsPool = sync.Pool{
+	New: func() interface{} { return make(map[common.Hash][]*types.Log, defaultNumOfSlots) },
+}
+
 func (s *StateDB) SlotDBPutSyncPool() {
 	for key := range s.parallel.stateObjectsSuicidedInSlot {
 		delete(s.parallel.stateObjectsSuicidedInSlot, key)
@@ -1559,6 +1563,11 @@ func (s *StateDB) SlotDBPutSyncPool() {
 		delete(s.snapStorage, key)
 	}
 	snapStoragePool.Put(s.snapStorage)
+
+	for key := range s.logs {
+		delete(s.logs, key)
+	}
+	logsPool.Put(s.logs)
 }
 
 // Copy all the basic fields, initialize the memory ones
@@ -1587,7 +1596,7 @@ func (s *StateDB) CopyForSlot() *StateDB {
 		stateObjectsPending: addressStructPool.Get().(map[common.Address]struct{}),
 		stateObjectsDirty:   addressStructPool.Get().(map[common.Address]struct{}),
 		refund:              s.refund, // should be 0
-		logs:                make(map[common.Hash][]*types.Log, defaultNumOfSlots),
+		logs:                logsPool.Get().(map[common.Hash][]*types.Log),
 		logSize:             0,
 		preimages:           make(map[common.Hash][]byte, len(s.preimages)),
 		journal:             journalPool.Get().(*journal),
