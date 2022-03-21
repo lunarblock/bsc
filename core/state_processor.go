@@ -592,6 +592,7 @@ func (p *ParallelStateProcessor) dispatchToIdleSlot(statedb *state.StateDB, txRe
 			if len(slot.mergedChangeList) == 0 {
 				// first transaction of a slot, there is no usable SlotDB, have to create one for it.
 				txReq.slotDB = state.NewSlotDB(statedb, consensus.SystemAddress, p.mergedTxIndex, false)
+				p.slotDBsToRelease = append(p.slotDBsToRelease, txReq.slotDB)
 			}
 			log.Debug("dispatchToIdleSlot", "Slot", i, "txIndex", txReq.txIndex)
 			slot.tailTxReq = txReq
@@ -617,6 +618,7 @@ func (p *ParallelStateProcessor) waitUntilNextTxDone(statedb *state.StateDB, gp 
 			// the target slot is waiting for new slotDB
 			slotState := p.slotState[result.slotIndex]
 			slotDB := state.NewSlotDB(statedb, consensus.SystemAddress, p.mergedTxIndex, result.keepSystem)
+			p.slotDBsToRelease = append(p.slotDBsToRelease, slotDB)
 			slotState.slotdbChan <- slotDB
 			continue
 		}
@@ -642,7 +644,6 @@ func (p *ParallelStateProcessor) waitUntilNextTxDone(statedb *state.StateDB, gp 
 	// It is safe, since write and read is in sequential, do write -> notify -> read
 	// It is not good, but work right now.
 	changeList := statedb.MergeSlotDB(result.slotDB, result.receipt, resultTxIndex)
-	p.slotDBsToRelease = append(p.slotDBsToRelease, result.slotDB)
 	resultSlotState.mergedChangeList = append(resultSlotState.mergedChangeList, changeList)
 
 	if resultTxIndex != p.mergedTxIndex+1 {
