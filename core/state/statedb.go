@@ -373,7 +373,7 @@ func (s *StateDB) MergeSlotDB(slotDb *StateDB, slotReceipt *types.Receipt, txInd
 			// can not do copy or ownership transfer directly, since dirtyObj could have outdated
 			// data(may be update within the conflict window)
 
-			var newMainObj *StateObject
+			var newMainObj = mainObj
 			if _, created := slotDb.parallel.addrStateChangesInSlot[addr]; created {
 				// there are 3 kinds of state change:
 				// 1.Suicide
@@ -397,7 +397,6 @@ func (s *StateDB) MergeSlotDB(slotDb *StateDB, slotReceipt *types.Receipt, txInd
 				// deepCopy a temporary *StateObject for safety, since slot could read the address,
 				// dispatch should avoid overwrite the StateObject directly otherwise, it could
 				// crash for: concurrent map iteration and map write
-				newMainObj = mainObj.deepCopy(s)
 				if _, balanced := slotDb.parallel.balanceChangesInSlot[addr]; balanced {
 					log.Debug("merge state object: Balance",
 						"newMainObj.Balance()", newMainObj.Balance(),
@@ -1316,7 +1315,7 @@ func (s *StateDB) ForEachStorage(addr common.Address, cb func(key, value common.
 
 	for it.Next() {
 		key := common.BytesToHash(s.trie.GetKey(it.Key))
-		if value, dirty := so.dirtyStorage[key]; dirty {
+		if value, dirty := so.dirtyStorage.GetValue(key); dirty {
 			if !cb(key, value) {
 				return nil
 			}
