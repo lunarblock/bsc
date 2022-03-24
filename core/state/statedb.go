@@ -855,7 +855,7 @@ func (s *StateDB) AddBalance(addr common.Address, amount *big.Int) {
 	if stateObject != nil {
 		if s.parallel.isSlotDB {
 			if _, ok := s.parallel.dirtiedStateObjectsInSlot[addr]; !ok {
-				newStateObject := stateObject.deepCopy(s)
+				newStateObject := stateObject.copyForSlot(s)
 				newStateObject.AddBalance(amount)
 				s.parallel.dirtiedStateObjectsInSlot[addr] = newStateObject
 			} else {
