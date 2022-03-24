@@ -611,6 +611,7 @@ func (s *StateDB) Preimages() map[common.Hash][]byte {
 // AddRefund adds gas to the refund counter
 func (s *StateDB) AddRefund(gas uint64) {
 	s.journal.append(refundChange{prev: s.refund})
+	log.Info("add refund", "refund", s.refund, "thash", s.thash.String())
 	s.refund += gas
 }
 
@@ -618,6 +619,8 @@ func (s *StateDB) AddRefund(gas uint64) {
 // This method will panic if the refund counter goes below zero
 func (s *StateDB) SubRefund(gas uint64) {
 	s.journal.append(refundChange{prev: s.refund})
+	log.Info("sub refund", "refund", s.refund, "thash", s.thash.String())
+
 	if gas > s.refund {
 		panic(fmt.Sprintf("Refund counter below zero (gas: %d > refund: %d)", gas, s.refund))
 	}
