@@ -346,6 +346,9 @@ func (s *StateObject) setState(key, value common.Hash) {
 // finalise moves all dirty storage slots into the pending area to be hashed or
 // committed later. It is invoked at the end of every transaction.
 func (s *StateObject) finalise(prefetch bool) {
+	if s.isInSlot {
+		panic("state object in slot can not finalise")
+	}
 	slotsToPrefetch := make([][]byte, 0, s.dirtyStorage.Length())
 	s.dirtyStorage.Range(func(key, value interface{}) bool {
 		s.storePendingStorage(key.(common.Hash), value.(common.Hash))
@@ -428,6 +431,9 @@ func (s *StateObject) toNormal() {
 // updateTrie writes cached storage modifications into the object's storage trie.
 // It will return nil if the trie has not been loaded and no changes have been made
 func (s *StateObject) updateTrie(db Database) Trie {
+	if s.isInSlot {
+		panic("state object in slot should not update trie")
+	}
 	// Make sure all dirty slots are finalized into the pending storage area
 	s.finalise(false) // Don't prefetch any more, pull directly if need be
 	if s.pendingStorage.Length() == 0 {
@@ -602,8 +608,13 @@ func (s *StateObject) copyForSlot(db *StateDB) *StateObject {
 	stateObject.pendingStorage = s.pendingStorage
 
 	stateObject.isInSlot = true
-	stateObject.dirtyStorageInSlot = make(map[common.Hash]common.Hash)
-	stateObject.pendingStorageInSlot = make(map[common.Hash]common.Hash)
+	if s.isInSlot {
+		stateObject.dirtyStorageInSlot = s.dirtyStorageInSlot
+		stateObject.pendingStorageInSlot = s.pendingStorageInSlot
+	} else {
+		stateObject.dirtyStorageInSlot = make(map[common.Hash]common.Hash)
+		stateObject.pendingStorageInSlot = make(map[common.Hash]common.Hash)
+	}
 
 	stateObject.suicided = s.suicided
 	stateObject.dirtyCode = s.dirtyCode

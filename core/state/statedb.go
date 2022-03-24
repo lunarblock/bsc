@@ -362,10 +362,10 @@ func (s *StateDB) MergeSlotDB(slotDb *StateDB, slotReceipt *types.Receipt, txInd
 			continue
 		}
 		mainObj, exist := s.loadStateObj(addr)
+		dirtyObj.toNormal()
 		if !exist {
 			// addr not exist on main DB, do ownership transfer
 			dirtyObj.db = s
-			dirtyObj.toNormal()
 			dirtyObj.finalise(true) // true: prefetch on dispatcher
 			s.storeStateObj(addr, dirtyObj)
 			delete(slotDb.parallel.dirtiedStateObjectsInSlot, addr) // transfer ownership
@@ -385,7 +385,6 @@ func (s *StateDB) MergeSlotDB(slotDb *StateDB, slotReceipt *types.Receipt, txInd
 				// For these state change, do ownership transafer for efficiency:
 				log.Debug("MergeSlotDB state object merge: addr state change")
 				dirtyObj.db = s
-				dirtyObj.toNormal()
 				newMainObj = dirtyObj
 				delete(slotDb.parallel.dirtiedStateObjectsInSlot, addr) // transfer ownership
 				if dirtyObj.deleted {
