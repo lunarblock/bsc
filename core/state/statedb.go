@@ -365,6 +365,7 @@ func (s *StateDB) MergeSlotDB(slotDb *StateDB, slotReceipt *types.Receipt, txInd
 		if !exist {
 			// addr not exist on main DB, do ownership transfer
 			dirtyObj.db = s
+			dirtyObj.toNormal()
 			dirtyObj.finalise(true) // true: prefetch on dispatcher
 			s.storeStateObj(addr, dirtyObj)
 			delete(slotDb.parallel.dirtiedStateObjectsInSlot, addr) // transfer ownership
@@ -384,6 +385,7 @@ func (s *StateDB) MergeSlotDB(slotDb *StateDB, slotReceipt *types.Receipt, txInd
 				// For these state change, do ownership transafer for efficiency:
 				log.Debug("MergeSlotDB state object merge: addr state change")
 				dirtyObj.db = s
+				dirtyObj.toNormal()
 				newMainObj = dirtyObj
 				delete(slotDb.parallel.dirtiedStateObjectsInSlot, addr) // transfer ownership
 				if dirtyObj.deleted {
@@ -882,7 +884,7 @@ func (s *StateDB) SubBalance(addr common.Address, amount *big.Int) {
 	if stateObject != nil {
 		if s.parallel.isSlotDB {
 			if _, ok := s.parallel.dirtiedStateObjectsInSlot[addr]; !ok {
-				newStateObject := stateObject.deepCopy(s)
+				newStateObject := stateObject.copyForSlot(s)
 				newStateObject.SubBalance(amount)
 				s.parallel.dirtiedStateObjectsInSlot[addr] = newStateObject
 			} else {
@@ -899,7 +901,7 @@ func (s *StateDB) SetBalance(addr common.Address, amount *big.Int) {
 	if stateObject != nil {
 		if s.parallel.isSlotDB {
 			if _, ok := s.parallel.dirtiedStateObjectsInSlot[addr]; !ok {
-				newStateObject := stateObject.deepCopy(s)
+				newStateObject := stateObject.copyForSlot(s)
 				newStateObject.SetBalance(amount)
 				s.parallel.dirtiedStateObjectsInSlot[addr] = newStateObject
 			} else {
@@ -932,7 +934,7 @@ func (s *StateDB) SetNonce(addr common.Address, nonce uint64) {
 	if stateObject != nil {
 		if s.parallel.isSlotDB {
 			if _, ok := s.parallel.dirtiedStateObjectsInSlot[addr]; !ok {
-				newStateObject := stateObject.deepCopy(s)
+				newStateObject := stateObject.copyForSlot(s)
 				newStateObject.SetNonce(nonce)
 				s.parallel.dirtiedStateObjectsInSlot[addr] = newStateObject
 			} else {
@@ -949,7 +951,7 @@ func (s *StateDB) SetCode(addr common.Address, code []byte) {
 	if stateObject != nil {
 		if s.parallel.isSlotDB {
 			if _, ok := s.parallel.dirtiedStateObjectsInSlot[addr]; !ok {
-				newStateObject := stateObject.deepCopy(s)
+				newStateObject := stateObject.copyForSlot(s)
 				newStateObject.SetCode(crypto.Keccak256Hash(code), code)
 				s.parallel.dirtiedStateObjectsInSlot[addr] = newStateObject
 			} else {
@@ -977,7 +979,7 @@ func (s *StateDB) SetState(addr common.Address, key, value common.Hash) {
 				}
 			}
 			if _, ok := s.parallel.dirtiedStateObjectsInSlot[addr]; !ok {
-				newStateObject := stateObject.deepCopy(s)
+				newStateObject := stateObject.copyForSlot(s)
 				newStateObject.SetState(s.db, key, value)
 				s.parallel.dirtiedStateObjectsInSlot[addr] = newStateObject
 			} else {
@@ -1025,7 +1027,7 @@ func (s *StateDB) Suicide(addr common.Address) bool {
 		s.parallel.addrStateChangesInSlot[addr] = struct{}{}
 		if _, ok := s.parallel.dirtiedStateObjectsInSlot[addr]; !ok {
 			// do copy-on-write for suicide "write"
-			newStateObject := stateObject.deepCopy(s)
+			newStateObject := stateObject.copyForSlot(s)
 			newStateObject.markSuicided()
 			newStateObject.data.Balance = new(big.Int)
 			s.parallel.dirtiedStateObjectsInSlot[addr] = newStateObject

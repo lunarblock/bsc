@@ -111,6 +111,10 @@ type StateObject struct {
 	dirtyStorage   *Storage // Storage entries that have been modified in the current transaction execution
 	fakeStorage    *Storage // Fake storage which constructed by caller for debugging purpose.
 
+	isInSlot             bool
+	pendingStorageInSlot map[common.Hash]common.Hash
+	dirtyStorageInSlot   map[common.Hash]common.Hash
+
 	// Cache flags.
 	// When an object is marked suicided it will be delete from the trie
 	// during the "update" phase of the state transition.
@@ -214,7 +218,7 @@ func (s *StateObject) GetState(db Database, key common.Hash) common.Hash {
 		return fakeValue
 	}
 	// If we have a dirty value for this state entry, return it
-	value, dirty := s.dirtyStorage.GetValue(key)
+	value, dirty := s.getDirtyStorage(key)
 	if dirty {
 		return value
 	}
@@ -230,10 +234,10 @@ func (s *StateObject) GetCommittedState(db Database, key common.Hash) common.Has
 		return fakeValue
 	}
 	// If we have a pending write or clean cached, return that
-	if value, pending := s.pendingStorage.GetValue(key); pending {
+	if value, pending := s.getPendingStorage(key); pending {
 		return value
 	}
-	if value, cached := s.originStorage.GetValue(key); cached {
+	if value, cached := s.getOriginStorage(key); cached {
 		return value
 	}
 	// If no live objects are available, attempt to use snapshots
@@ -292,7 +296,7 @@ func (s *StateObject) GetCommittedState(db Database, key common.Hash) common.Has
 		}
 		value.SetBytes(content)
 	}
-	s.originStorage.StoreValue(key, value)
+	s.storeOriginalStorage(key, value)
 	return value
 }
 
@@ -336,7 +340,7 @@ func (s *StateObject) SetStorage(storage map[common.Hash]common.Hash) {
 }
 
 func (s *StateObject) setState(key, value common.Hash) {
-	s.dirtyStorage.StoreValue(key, value)
+	s.storeDirtyStorage(key, value)
 }
 
 // finalise moves all dirty storage slots into the pending area to be hashed or
@@ -344,9 +348,9 @@ func (s *StateObject) setState(key, value common.Hash) {
 func (s *StateObject) finalise(prefetch bool) {
 	slotsToPrefetch := make([][]byte, 0, s.dirtyStorage.Length())
 	s.dirtyStorage.Range(func(key, value interface{}) bool {
-		s.pendingStorage.Store(key, value)
+		s.storePendingStorage(key.(common.Hash), value.(common.Hash))
 
-		originalValue, _ := s.originStorage.GetValue(key.(common.Hash))
+		originalValue, _ := s.getOriginStorage(key.(common.Hash))
 		if value.(common.Hash) != originalValue {
 			originalKey := key.(common.Hash)
 			slotsToPrefetch = append(slotsToPrefetch, common.CopyBytes(originalKey[:])) // Copy needed for closure
@@ -360,6 +364,65 @@ func (s *StateObject) finalise(prefetch bool) {
 	if s.dirtyStorage.Length() > 0 {
 		s.dirtyStorage = &Storage{}
 	}
+}
+
+func (s *StateObject) getOriginStorage(key common.Hash) (common.Hash, bool) {
+	return s.originStorage.GetValue(key)
+}
+
+func (s *StateObject) storeOriginalStorage(key common.Hash, value common.Hash) {
+	s.originStorage.StoreValue(key, value)
+}
+
+func (s *StateObject) getPendingStorage(key common.Hash) (common.Hash, bool) {
+	if s.isInSlot {
+		slotValue, ok := s.pendingStorageInSlot[key]
+		if ok {
+			return slotValue, ok
+		}
+	}
+	return s.pendingStorage.GetValue(key)
+}
+
+func (s *StateObject) storePendingStorage(key common.Hash, value common.Hash) {
+	if s.isInSlot {
+		s.pendingStorageInSlot[key] = value
+		return
+	}
+	s.pendingStorage.StoreValue(key, value)
+}
+
+func (s *StateObject) getDirtyStorage(key common.Hash) (common.Hash, bool) {
+	if s.isInSlot {
+		slotValue, ok := s.dirtyStorageInSlot[key]
+		if ok {
+			return slotValue, ok
+		}
+	}
+	return s.dirtyStorage.GetValue(key)
+}
+
+func (s *StateObject) storeDirtyStorage(key common.Hash, value common.Hash) {
+	if s.isInSlot {
+		s.dirtyStorageInSlot[key] = value
+		return
+	}
+	s.dirtyStorage.StoreValue(key, value)
+}
+
+func (s *StateObject) toNormal() {
+	if !s.isInSlot {
+		return
+	}
+
+	for key, value := range s.dirtyStorageInSlot {
+		s.dirtyStorage.StoreValue(key, value)
+	}
+	for key, value := range s.pendingStorageInSlot {
+		s.pendingStorage.StoreValue(key, value)
+	}
+
+	s.isInSlot = false
 }
 
 // updateTrie writes cached storage modifications into the object's storage trie.
@@ -390,12 +453,12 @@ func (s *StateObject) updateTrie(db Database) Trie {
 		value := v.(common.Hash)
 
 		// Skip noop changes, persist actual changes
-		originalValue, _ := s.originStorage.GetValue(k.(common.Hash))
+		originalValue, _ := s.getOriginStorage(k.(common.Hash))
 		if v.(common.Hash) == originalValue {
 			return true
 		}
 
-		s.originStorage.Store(k, v)
+		s.storeOriginalStorage(k.(common.Hash), v.(common.Hash))
 
 		var vs []byte
 		if (value == common.Hash{}) {
@@ -522,6 +585,26 @@ func (s *StateObject) deepCopy(db *StateDB) *StateObject {
 	stateObject.dirtyStorage = s.dirtyStorage.Copy()
 	stateObject.originStorage = s.originStorage.Copy()
 	stateObject.pendingStorage = s.pendingStorage.Copy()
+	stateObject.suicided = s.suicided
+	stateObject.dirtyCode = s.dirtyCode
+	stateObject.deleted = s.deleted
+	return stateObject
+}
+
+func (s *StateObject) copyForSlot(db *StateDB) *StateObject {
+	stateObject := newObject(db, s.address, s.data)
+	if s.trie != nil {
+		stateObject.trie = db.db.CopyTrie(s.trie)
+	}
+	stateObject.code = s.code
+	stateObject.dirtyStorage = s.dirtyStorage
+	stateObject.originStorage = s.originStorage
+	stateObject.pendingStorage = s.pendingStorage
+
+	stateObject.isInSlot = true
+	stateObject.dirtyStorageInSlot = make(map[common.Hash]common.Hash)
+	stateObject.pendingStorageInSlot = make(map[common.Hash]common.Hash)
+
 	stateObject.suicided = s.suicided
 	stateObject.dirtyCode = s.dirtyCode
 	stateObject.deleted = s.deleted
