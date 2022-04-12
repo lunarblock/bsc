@@ -2291,7 +2291,7 @@ func (s *StateDB) AccountsIntermediateRoot() {
 					panic(fmt.Errorf("can't encode object at %x: %v", addr[:], err))
 				}
 				obj.encodeData = data
-				log.Info("AccountsIntermediateRoot", "addr", obj.address,
+				log.Info("AccountsIntermediateRoot", "block", s.BlockHash().String(), "addr", obj.address,
 					"deleted", obj.deleted,
 					"balance", obj.data.Balance,
 					"nonce", obj.data.Nonce,
