@@ -745,7 +745,9 @@ func (s *StateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
 
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
-		return stateObject.GetState(s.db, hash)
+		val := stateObject.GetState(s.db, hash)
+		log.Info("GetState", "tx", s.thash.String(), "addr", addr.String(), "key", hash.String(), "val", val.String())
+		return val
 	}
 	return common.Hash{}
 }
@@ -955,6 +957,7 @@ func (s *StateDB) SetCode(addr common.Address, code []byte) {
 }
 
 func (s *StateDB) SetState(addr common.Address, key, value common.Hash) {
+	log.Info("SetState", "tx", s.thash.String(), "key", key.String(), "val", value.String())
 	stateObject := s.GetOrNewStateObject(addr)
 	if stateObject != nil {
 		if s.parallel.isSlotDB {
