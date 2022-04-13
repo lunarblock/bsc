@@ -519,6 +519,7 @@ func (s *StateObject) updateTrie(db Database) Trie {
 	s.pendingStorage.Range(func(k, v interface{}) bool {
 		key := k.(common.Hash)
 		value := v.(common.Hash)
+		log.Info("updateTrie", "addr", s.address.String(), "key", key.String(), "val", value.String())
 
 		// Skip noop changes, persist actual changes
 		originalValue, _ := s.originStorage.GetValue(k.(common.Hash))

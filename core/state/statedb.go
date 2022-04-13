@@ -1160,24 +1160,24 @@ func (s *StateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
 		}
 		s.parallel.stateReadsInSlot[addr][hash] = struct{}{}
 		if obj, ok := s.parallel.dirtiedStateObjectsInSlot[addr]; ok {
-			log.Info("GetState addr in dirty", "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
+			log.Info("GetState addr in dirty", "tx", s.thash.String(), "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
 				"addr", addr)
 			// 1.Try to get from dirty
 			if val, ok := obj.dirtyStorage.GetValue(hash); ok {
-				log.Info("GetState key in dirty", "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
+				log.Info("GetState key in dirty", "tx", s.thash.String(), "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
 					"addr", addr, "key", hash, "value", val)
 				return val
 			}
 			// 2.Try to get from pending, it is for merge to get KV from finalized StateObject.
 			if val, ok := obj.pendingStorage.GetValue(hash); ok {
-				log.Info("GetState key in pending", "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
+				log.Info("GetState key in pending", "tx", s.thash.String(), "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
 					"addr", addr, "key", hash, "value", val)
 				return val
 			}
 		}
 		// 3.Try to get from uncomfirmed DB
 		if val, ok := s.getKVFromUnconfirmedDB(addr, hash); ok {
-			log.Info("GetState in unconfirmed", "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
+			log.Info("GetState in unconfirmed", "tx", s.thash.String(), "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
 				"addr", addr, "key", hash, "value", val)
 			return val
 		}
@@ -1187,7 +1187,7 @@ func (s *StateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
 	stateObject := s.getStateObjectNoSlot(addr)
 	if stateObject != nil {
 		val := stateObject.GetState(s.db, hash)
-		log.Info("GetState in mainDB", "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
+		log.Info("GetState in mainDB", "tx", s.thash.String(), "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
 			"addr", addr, "key", hash, "value", val)
 		return val
 		// return stateObject.GetState(s.db, hash)
@@ -1497,7 +1497,7 @@ func (s *StateDB) SetState(addr common.Address, key, value common.Hash) {
 	stateObject := s.GetOrNewStateObject(addr) // attention: if StateObject's lightCopy, its storage is only a part of the full storage,
 	if stateObject != nil {
 		if s.parallel.isSlotDB {
-			log.Info("SetState", "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
+			log.Info("SetState", "tx", s.thash.String(), "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
 				"addr", addr, "key", key, "value", value)
 
 			if s.parallel.baseTxIndex+1 == s.txIndex {
@@ -1528,7 +1528,7 @@ func (s *StateDB) SetState(addr common.Address, key, value common.Hash) {
 			obj.SetState(s.db, key, value)
 			return
 		}
-		log.Info("SetState", "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
+		log.Info("SetState", "tx", s.thash.String(), "SlotIndex", s.parallel.SlotIndex, "txIndex", s.txIndex,
 			"addr", addr, "key", key, "value", value)
 		stateObject.SetState(s.db, key, value)
 	}
