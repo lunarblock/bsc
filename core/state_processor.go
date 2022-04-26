@@ -24,6 +24,7 @@ import (
 	"math/rand"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -80,6 +81,67 @@ type ParallelStateProcessor struct {
 	slotDBsToRelease     []*state.StateDB
 	debugErrorRedoNum    int
 	debugConflictRedoNum int
+
+	schedulerInfo *ParallelSchedulingInfo
+}
+
+type ParallelSchedulingInfo struct {
+	txsStatus            []TxSchedulingInfo
+	finalizedIdx         *int64
+	gasUsed              *uint64
+	commonTxLength       int
+	commonTxs            []*types.Transaction
+	receipts             []*types.Receipt
+	executionQueue       chan *ParallelTxRequest
+	validationQueue      chan *ParallelTxResult
+	finalizationQueue    chan *ParallelTxResult
+	finalizationExitChan chan struct{}
+	finalizationTopic    *SchedulerTopic
+	executionTopic       *SchedulerTopic
+	validationTopic      *SchedulerTopic
+	mainStateDB          *state.StateDB
+	unconfirmedStateDBs  *sync.Map
+}
+
+type TxSchedulingInfo struct {
+	status      TxSchedulingStatus
+	incarnation int
+	txResult    *ParallelTxResult
+}
+
+type TxSchedulingStatus int
+
+const (
+	TxSchedulingStatusReadyToExecute TxSchedulingStatus = 0
+	TxSchedulingStatusExecuting      TxSchedulingStatus = 1
+	TxSchedulingStatusExecuted       TxSchedulingStatus = 2
+	TxSchedulingStatusValidating     TxSchedulingStatus = 3
+	TxSchedulingStatusFinalized      TxSchedulingStatus = 4
+)
+
+type SchedulerTopic struct {
+	sync.RWMutex
+	subs []chan int
+}
+
+func NewSchedulerTopic() *SchedulerTopic {
+	return &SchedulerTopic{
+		subs: make([]chan int, 0),
+	}
+}
+
+func (t *SchedulerTopic) Subscribe(ch chan int) {
+	t.Lock()
+	defer t.Unlock()
+	t.subs = append(t.subs, ch)
+}
+
+func (t *SchedulerTopic) Pub(msg int) {
+	t.RLock()
+	defer t.RUnlock()
+	for _, ch := range t.subs {
+		ch <- msg
+	}
 }
 
 func NewParallelStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consensus.Engine, parallelNum int, queueSize int) *ParallelStateProcessor {
@@ -88,7 +150,7 @@ func NewParallelStateProcessor(config *params.ChainConfig, bc *BlockChain, engin
 		parallelNum:    parallelNum,
 		queueSize:      queueSize,
 	}
-	processor.init()
+	//processor.init()
 	return processor
 }
 
@@ -420,6 +482,8 @@ type ParallelTxResult struct {
 type ParallelTxRequest struct {
 	txIndex        int
 	tx             *types.Transaction
+	keepSystem     bool // todo: do we need it?
+	lastExecution  bool
 	slotDB         *state.StateDB
 	gasLimit       uint64
 	msg            types.Message
@@ -454,6 +518,237 @@ func (p *ParallelStateProcessor) init() {
 		go func(slotIndex int) {
 			p.runSlotLoop(slotIndex) // this loop will be permanent live
 		}(i)
+	}
+}
+
+func (p *ParallelStateProcessor) executionScheduler(schedulerInfo *ParallelSchedulingInfo, txReqs []*ParallelTxRequest) {
+	executionScheduleWindow := 2 * p.parallelNum
+
+	// sub msgs
+	finalizationChan := make(chan int, executionScheduleWindow)
+	schedulerInfo.finalizationTopic.Subscribe(finalizationChan)
+
+	// initial scheduling
+	for i, req := range txReqs {
+		if i > executionScheduleWindow {
+			break
+		}
+		schedulerInfo.txsStatus[i] = TxSchedulingInfo{
+			status:      TxSchedulingStatusExecuting,
+			incarnation: 0,
+		}
+		log.Info("put execution task to execution queue", "txIdx", i)
+		schedulerInfo.executionQueue <- req
+	}
+
+	for {
+		select {
+		case <-schedulerInfo.finalizationExitChan:
+			return
+		case finalizedTxIdx := <-finalizationChan:
+			log.Info("executionScheduler: received finalization tx", "txIdx", finalizedTxIdx)
+			if finalizedTxIdx+1 == schedulerInfo.commonTxLength {
+				return
+			}
+
+			for i := finalizedTxIdx + 1; i < len(txReqs) && i <= finalizedTxIdx+executionScheduleWindow; i++ {
+				if i == finalizedTxIdx+1 ||
+					(schedulerInfo.txsStatus[i].status == TxSchedulingStatusReadyToExecute && schedulerInfo.txsStatus[i].incarnation == 0) {
+					schedulerInfo.txsStatus[i].status = TxSchedulingStatusExecuting
+					schedulerInfo.txsStatus[i].incarnation += 1
+					log.Info("put execution task to execution queue", "txIdx", i)
+					schedulerInfo.executionQueue <- txReqs[i]
+				}
+			}
+		}
+	}
+}
+
+func (p *ParallelStateProcessor) validationScheduler(schedulerInfo *ParallelSchedulingInfo, txReqs []*ParallelTxRequest) {
+	executionScheduleWindow := 2 * p.parallelNum
+	finalizationChan := make(chan int, executionScheduleWindow)
+	schedulerInfo.finalizationTopic.Subscribe(finalizationChan)
+
+	for {
+		select {
+		case <-schedulerInfo.finalizationExitChan:
+			return
+		case finalizedTxIdx := <-finalizationChan:
+			log.Info("validationScheduler: received finalization tx", "txIdx", finalizedTxIdx)
+			if finalizedTxIdx+1 == schedulerInfo.commonTxLength {
+				return
+			}
+
+			for i := finalizedTxIdx + 1; i < len(txReqs) && i <= finalizedTxIdx+executionScheduleWindow; i++ {
+				if schedulerInfo.txsStatus[i].status == TxSchedulingStatusExecuted {
+					schedulerInfo.txsStatus[i].status = TxSchedulingStatusValidating
+					log.Info("send validation task to validation queue", "txIdx", i)
+					schedulerInfo.validationQueue <- schedulerInfo.txsStatus[i].txResult
+				}
+			}
+		}
+	}
+}
+
+func (p *ParallelStateProcessor) executionSlotLoop(schedulerInfo *ParallelSchedulingInfo) {
+	for {
+		select {
+		case <-schedulerInfo.finalizationExitChan:
+			return
+		case txReq := <-schedulerInfo.executionQueue:
+			log.Info("get execution task", "txIdx", txReq.txIndex)
+
+			// create new slotDB
+			slotDB := state.NewSlotDB(schedulerInfo.mainStateDB, consensus.SystemAddress, txReq.txIndex,
+				p.mergedTxIndex, txReq.keepSystem, schedulerInfo.unconfirmedStateDBs) // todo: to determine the keepSystem param
+			p.slotDBsToRelease = append(p.slotDBsToRelease, slotDB)
+
+			slotDB.Prepare(txReq.tx.Hash(), txReq.block.Hash(), txReq.txIndex)
+			blockContext := NewEVMBlockContext(txReq.block.Header(), p.bc, nil) // can share blockContext within a block for efficiency
+			evm := vm.NewEVM(blockContext, vm.TxContext{}, slotDB, p.config, txReq.vmConfig)
+			// gasLimit not accurate, but it is ok for block import.
+			// each slot would use its own gas pool, and will do gaslimit check later
+			gpSlot := new(GasPool).AddGas(txReq.gasLimit) // block.GasLimit()
+
+			_, result, err := applyTransactionStageExecution(txReq.msg, gpSlot, slotDB, evm)
+			if err != nil {
+				// the error could be caused by unconfirmed balance reference,
+				// the balance could insufficient to pay its gas limit, which cause it preCheck.buyGas() failed
+				// redo could solve it.
+				log.Warn("In slot execution error", "txIdx", txReq.txIndex, "error", err.Error())
+
+				// update status
+				schedulerInfo.txsStatus[txReq.txIndex].status = TxSchedulingStatusReadyToExecute
+				continue
+			}
+
+			if result.Failed() {
+				// if Tx is reverted, all its state change will be discarded
+				slotDB.RevertSlotDB(txReq.msg.From())
+			}
+			slotDB.Finalise(true) // Finalise could write s.parallel.addrStateChangesInSlot[addr], keep Read and Write in same routine to avoid crash
+
+			// add updated slotDB
+			schedulerInfo.unconfirmedStateDBs.Store(txReq.txIndex, slotDB)
+
+			txResult := &ParallelTxResult{
+				updateSlotDB: false,
+				txReq:        txReq,
+				receipt:      nil, // receipt is generated in finalize stage
+				slotDB:       slotDB,
+				err:          err,
+				gpSlot:       gpSlot,
+				evm:          evm,
+				result:       result,
+			}
+			schedulerInfo.txsStatus[txReq.txIndex].txResult = txResult
+			schedulerInfo.txsStatus[txReq.txIndex].status = TxSchedulingStatusValidating
+
+			log.Info("execute tx success", "txIdx", txReq.txIndex)
+			schedulerInfo.validationQueue <- txResult // for executed tx, send it to the validation queue directly
+		}
+	}
+}
+
+func (p *ParallelStateProcessor) validationSlotLoop(schedulerInfo *ParallelSchedulingInfo) {
+	for {
+		select {
+		case <-schedulerInfo.finalizationExitChan:
+			return
+		case txResult := <-schedulerInfo.validationQueue:
+			log.Info("get validation task", "txIdx", txResult.txReq.txIndex)
+			txReq := txResult.txReq
+			slotDB := txResult.slotDB
+			header := txReq.block.Header()
+
+			// do conflict detect
+			hasConflict := false
+			systemAddrConflict := false
+			if txResult.err != nil {
+				log.Info("redo, since in slot execute failed", "txIdx", txReq.txIndex, "err", txResult.err)
+				hasConflict = true
+			} else if slotDB.SystemAddressRedo() {
+				log.Info("nee"+
+					"d system address redo", "txIdx", txReq.txIndex)
+				hasConflict = true
+				systemAddrConflict = true
+			} else if slotDB.NeedsRedo() {
+				log.Info("needs redo", "txIdx", txReq.txIndex)
+				// if this is any reason that indicates this transaction needs to redo, skip the conflict check
+				hasConflict = true
+			} else {
+				// to check if what the slot db read is correct.
+				if !slotDB.IsParallelReadsValid() {
+					log.Info("reads invalid data", "txIdx", txReq.txIndex)
+					hasConflict = true
+				}
+			}
+
+			if !txReq.lastExecution && hasConflict {
+				p.debugConflictRedoNum++
+				// re-run should not have conflict, since it has the latest world state.
+				txReq.keepSystem = systemAddrConflict // todo: confirm this
+				schedulerInfo.txsStatus[txReq.txIndex].status = TxSchedulingStatusReadyToExecute
+
+				log.Info("validate tx fail", "txIdx", txReq.txIndex, "merged", p.mergedTxIndex)
+				// only send it to executing queue if it's the next to be merged
+				if txReq.txIndex == p.mergedTxIndex+1 {
+					log.Info("validate tx fail, mark it the last execution", "txIdx", txReq.txIndex, "merged", p.mergedTxIndex)
+					txReq.lastExecution = true
+
+					schedulerInfo.txsStatus[txReq.txIndex].status = TxSchedulingStatusExecuting
+					schedulerInfo.txsStatus[txReq.txIndex].incarnation += 1
+					schedulerInfo.executionQueue <- txReq
+				}
+				continue
+			}
+
+			// if the validated tx is the tx next to the merged tx, send it to finalization queue directly
+			if txReq.txIndex == p.mergedTxIndex+1 { // todo: is there concurrent issue
+				// make sure no tx can be finalized twice
+				if !atomic.CompareAndSwapInt64(schedulerInfo.finalizedIdx, int64(txReq.txIndex-1), int64(txReq.txIndex)) {
+					continue
+				}
+
+				txResult.receipt, txResult.err = applyTransactionStageFinalization(txResult.evm, txResult.result,
+					txReq.msg, p.config, txResult.slotDB, header, txReq.tx, schedulerInfo.gasUsed, txReq.bloomProcessor)
+
+				log.Info("validate tx success, put it to finalization queue", "txIdx", txReq.txIndex)
+				schedulerInfo.finalizationQueue <- txResult
+			} else {
+				log.Info("validate tx success, put it to validation queue", "txIdx", txReq.txIndex, "merged", p.mergedTxIndex)
+				schedulerInfo.txsStatus[txReq.txIndex].status = TxSchedulingStatusExecuted // don't need to redo immediately
+			}
+		}
+	}
+}
+
+func (p *ParallelStateProcessor) finalizationSlotLoop(schedulerInfo *ParallelSchedulingInfo) {
+	for {
+		select {
+		case txResult := <-schedulerInfo.finalizationQueue:
+			log.Info("get finalization task", "txIdx", txResult.txReq.txIndex, "merged", p.mergedTxIndex)
+
+			txIndex := txResult.txReq.txIndex
+			if txIndex != p.mergedTxIndex+1 {
+				continue
+			}
+			schedulerInfo.mainStateDB.MergeSlotDB(txResult.slotDB, txResult.receipt, txIndex)
+			p.mergedTxIndex = txIndex
+
+			schedulerInfo.commonTxs[txIndex] = txResult.txReq.tx
+			schedulerInfo.receipts[txIndex] = txResult.receipt
+			schedulerInfo.txsStatus[txIndex].status = TxSchedulingStatusFinalized
+
+			schedulerInfo.finalizationTopic.Pub(txIndex)
+
+			log.Info("finalized tx", "index", txIndex, "total", schedulerInfo.commonTxLength)
+			// exit if txs are all finalized
+			if txIndex+1 == schedulerInfo.commonTxLength {
+				close(schedulerInfo.finalizationExitChan) // notify all the routines
+				return
+			}
+		}
 	}
 }
 
@@ -914,21 +1209,17 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	var (
 		usedGas = new(uint64)
 		header  = block.Header()
-		gp      = new(GasPool).AddGas(block.GasLimit())
 	)
 	log.Info("ProcessParallel", "block", header.Number)
-	var receipts = make([]*types.Receipt, 0)
 	txNum := len(block.Transactions())
 	p.resetState(txNum, statedb)
 
 	// Iterate over and process the individual transactions
 	posa, isPoSA := p.engine.(consensus.PoSA)
-	commonTxs := make([]*types.Transaction, 0, txNum)
 	// usually do have two tx, one for validator set contract, another for system reward contract.
 	systemTxs := make([]*types.Transaction, 0, 2)
 
 	signer, _, bloomProcessor := p.preExecute(block, statedb, cfg, true)
-	var waitTxChan, curTxChan chan struct{}
 	var txReqs []*ParallelTxRequest
 	for i, tx := range block.Transactions() {
 		if isPoSA {
@@ -949,64 +1240,73 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 			return statedb, nil, nil, 0, err
 		}
 
-		// parallel start, wrap an exec message, which will be dispatched to a slot
-		waitTxChan = curTxChan // can be nil, if this is the tx of first batch, otherwise, it is previous Tx's wait channel
-		curTxChan = make(chan struct{}, 1)
-
 		txReq := &ParallelTxRequest{
 			txIndex:        i,
 			tx:             tx,
-			slotDB:         nil,
-			gasLimit:       block.GasLimit(), // gp.Gas().
+			gasLimit:       block.GasLimit(),
 			msg:            msg,
 			block:          block,
 			vmConfig:       cfg,
 			bloomProcessor: bloomProcessor,
-			usedGas:        usedGas,
-			waitTxChan:     waitTxChan,
-			curTxChan:      curTxChan,
+			usedGas:        usedGas, // TODO: usedGas should be wrong?
 		}
 		txReqs = append(txReqs, txReq)
-		// from := txReq.msg.From()
-		// p.txReqAccountSorted[from] = append(p.txReqAccountSorted[from], txReq)
-		// Generate TxReqUnit every 80() transaction?
-		// if (i + 1)	% *(p.parallelNum *10) == 0 {
-		// 	p.txReqAccountSorted = make(map[common.Address][]*ParallelTxRequest) // fixme: memory reuse?
-		// }
 	}
-	p.doStaticDispatch(statedb, txReqs)
-	for _, slot := range p.slotState {
-		slot.pendingTxReqChan <- struct{}{}
-	}
-	for {
-		if len(commonTxs)+len(systemTxs) == txNum {
-			break
-		}
 
-		result := p.waitUntilNextTxDone(statedb, gp)
-
-		// update tx result
-		if result.err != nil {
-			log.Error("ProcessParallel a failed tx", "resultSlotIndex", result.slotIndex,
-				"resultTxIndex", result.txReq.txIndex, "result.err", result.err)
-			return statedb, nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", result.txReq.txIndex, result.txReq.tx.Hash().Hex(), result.err)
-		}
-
-		commonTxs = append(commonTxs, result.txReq.tx)
-		receipts = append(receipts, result.receipt)
+	p.resetScheduler(statedb, txReqs)
+	log.Info("ProcessParallel", "block", header.Number, "systemTx", len(systemTxs), "commonTx", len(p.schedulerInfo.commonTxs), "totalTx", len(block.Transactions()))
+	if len(txReqs) > 0 {
+		<-p.schedulerInfo.finalizationExitChan
 	}
 
 	// len(commonTxs) could be 0, such as: https://bscscan.com/block/14580486
-	if len(commonTxs) > 0 {
+	if len(p.schedulerInfo.commonTxs) > 0 {
 		log.Info("ProcessParallel tx all done", "block", header.Number, "usedGas", *usedGas,
 			"txNum", txNum,
-			"len(commonTxs)", len(commonTxs),
+			"len(commonTxs)", len(p.schedulerInfo.commonTxs),
 			"errorNum", p.debugErrorRedoNum,
 			"conflictNum", p.debugConflictRedoNum,
-			"redoRate(%)", 100*(p.debugErrorRedoNum+p.debugConflictRedoNum)/len(commonTxs))
+			"redoRate(%)", 100*(p.debugErrorRedoNum+p.debugConflictRedoNum)/len(p.schedulerInfo.commonTxs))
 	}
-	allLogs, err := p.postExecute(block, statedb, &commonTxs, &receipts, &systemTxs, usedGas, bloomProcessor)
-	return statedb, receipts, allLogs, *usedGas, err
+	allLogs, err := p.postExecute(block, p.schedulerInfo.mainStateDB, &p.schedulerInfo.commonTxs, &p.schedulerInfo.receipts, &systemTxs, p.schedulerInfo.gasUsed, bloomProcessor)
+	return p.schedulerInfo.mainStateDB, p.schedulerInfo.receipts, allLogs, *p.schedulerInfo.gasUsed, err
+}
+
+func (p *ParallelStateProcessor) resetScheduler(stateDB *state.StateDB, txReqs []*ParallelTxRequest) {
+	var finalizedIdx int64 = -1
+	schedulerInfo := &ParallelSchedulingInfo{
+		finalizedIdx: &finalizedIdx,
+		commonTxs:    make([]*types.Transaction, len(txReqs)),
+		receipts:     make([]*types.Receipt, len(txReqs)),
+		mainStateDB:  stateDB,
+		gasUsed:      new(uint64),
+	}
+	p.schedulerInfo = schedulerInfo
+
+	if len(txReqs) == 0 {
+		return
+	}
+
+	schedulerInfo.commonTxLength = len(txReqs)
+	schedulerInfo.executionTopic = NewSchedulerTopic()
+	schedulerInfo.validationTopic = NewSchedulerTopic()
+	schedulerInfo.finalizationTopic = NewSchedulerTopic()
+
+	schedulerInfo.txsStatus = make([]TxSchedulingInfo, len(txReqs))
+	schedulerInfo.executionQueue = make(chan *ParallelTxRequest, 100) // todo: fix magic number
+	schedulerInfo.validationQueue = make(chan *ParallelTxResult, 100)
+	schedulerInfo.finalizationQueue = make(chan *ParallelTxResult, 100)
+	schedulerInfo.finalizationExitChan = make(chan struct{})
+	schedulerInfo.unconfirmedStateDBs = new(sync.Map)
+
+	go p.executionScheduler(schedulerInfo, txReqs)
+	go p.validationScheduler(schedulerInfo, txReqs)
+
+	for i := 0; i < p.parallelNum; i++ {
+		go p.executionSlotLoop(schedulerInfo)
+		go p.validationSlotLoop(schedulerInfo)
+	}
+	go p.finalizationSlotLoop(schedulerInfo)
 }
 
 // Before transactions are executed, do shared preparation for Process() & ProcessParallel()
