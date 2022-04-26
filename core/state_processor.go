@@ -537,7 +537,6 @@ func (p *ParallelStateProcessor) executionScheduler(schedulerInfo *ParallelSched
 			status:      TxSchedulingStatusExecuting,
 			incarnation: 0,
 		}
-		log.Info("put execution task to execution queue", "txIdx", i)
 		schedulerInfo.executionQueue <- req
 	}
 
@@ -556,7 +555,6 @@ func (p *ParallelStateProcessor) executionScheduler(schedulerInfo *ParallelSched
 					(schedulerInfo.txsStatus[i].status == TxSchedulingStatusReadyToExecute && schedulerInfo.txsStatus[i].incarnation == 0) {
 					schedulerInfo.txsStatus[i].status = TxSchedulingStatusExecuting
 					schedulerInfo.txsStatus[i].incarnation += 1
-					log.Info("put execution task to execution queue", "txIdx", i)
 					schedulerInfo.executionQueue <- txReqs[i]
 				}
 			}
@@ -596,8 +594,6 @@ func (p *ParallelStateProcessor) executionSlotLoop(schedulerInfo *ParallelSchedu
 		case <-schedulerInfo.finalizationExitChan:
 			return
 		case txReq := <-schedulerInfo.executionQueue:
-			log.Info("get execution task", "txIdx", txReq.txIndex)
-
 			// create new slotDB
 			slotDB := state.NewSlotDB(schedulerInfo.mainStateDB, consensus.SystemAddress, txReq.txIndex,
 				p.mergedTxIndex, txReq.keepSystem, schedulerInfo.unconfirmedStateDBs) // todo: to determine the keepSystem param
@@ -644,7 +640,6 @@ func (p *ParallelStateProcessor) executionSlotLoop(schedulerInfo *ParallelSchedu
 			schedulerInfo.txsStatus[txReq.txIndex].txResult = txResult
 			schedulerInfo.txsStatus[txReq.txIndex].status = TxSchedulingStatusValidating
 
-			log.Info("execute tx success", "txIdx", txReq.txIndex)
 			schedulerInfo.validationQueue <- txResult // for executed tx, send it to the validation queue directly
 		}
 	}
@@ -656,7 +651,6 @@ func (p *ParallelStateProcessor) validationSlotLoop(schedulerInfo *ParallelSched
 		case <-schedulerInfo.finalizationExitChan:
 			return
 		case txResult := <-schedulerInfo.validationQueue:
-			log.Info("get validation task", "txIdx", txResult.txReq.txIndex)
 			txReq := txResult.txReq
 			slotDB := txResult.slotDB
 			header := txReq.block.Header()
@@ -665,21 +659,16 @@ func (p *ParallelStateProcessor) validationSlotLoop(schedulerInfo *ParallelSched
 			hasConflict := false
 			systemAddrConflict := false
 			if txResult.err != nil {
-				log.Info("redo, since in slot execute failed", "txIdx", txReq.txIndex, "err", txResult.err)
 				hasConflict = true
 			} else if slotDB.SystemAddressRedo() {
-				log.Info("nee"+
-					"d system address redo", "txIdx", txReq.txIndex)
 				hasConflict = true
 				systemAddrConflict = true
 			} else if slotDB.NeedsRedo() {
-				log.Info("needs redo", "txIdx", txReq.txIndex)
 				// if this is any reason that indicates this transaction needs to redo, skip the conflict check
 				hasConflict = true
 			} else {
 				// to check if what the slot db read is correct.
 				if !slotDB.IsParallelReadsValid() {
-					log.Info("reads invalid data", "txIdx", txReq.txIndex)
 					hasConflict = true
 				}
 			}
@@ -690,7 +679,6 @@ func (p *ParallelStateProcessor) validationSlotLoop(schedulerInfo *ParallelSched
 				txReq.keepSystem = systemAddrConflict // todo: confirm this
 				schedulerInfo.txsStatus[txReq.txIndex].status = TxSchedulingStatusReadyToExecute
 
-				log.Info("validate tx fail", "txIdx", txReq.txIndex, "merged", p.mergedTxIndex)
 				// only send it to executing queue if it's the next to be merged
 				if txReq.txIndex == p.mergedTxIndex+1 {
 					log.Info("validate tx fail, mark it the last execution", "txIdx", txReq.txIndex, "merged", p.mergedTxIndex)
@@ -713,10 +701,8 @@ func (p *ParallelStateProcessor) validationSlotLoop(schedulerInfo *ParallelSched
 				txResult.receipt, txResult.err = applyTransactionStageFinalization(txResult.evm, txResult.result,
 					txReq.msg, p.config, txResult.slotDB, header, txReq.tx, schedulerInfo.gasUsed, txReq.bloomProcessor)
 
-				log.Info("validate tx success, put it to finalization queue", "txIdx", txReq.txIndex)
 				schedulerInfo.finalizationQueue <- txResult
 			} else {
-				log.Info("validate tx success, put it to validation queue", "txIdx", txReq.txIndex, "merged", p.mergedTxIndex)
 				schedulerInfo.txsStatus[txReq.txIndex].status = TxSchedulingStatusExecuted // don't need to redo immediately
 			}
 		}
@@ -727,8 +713,6 @@ func (p *ParallelStateProcessor) finalizationSlotLoop(schedulerInfo *ParallelSch
 	for {
 		select {
 		case txResult := <-schedulerInfo.finalizationQueue:
-			log.Info("get finalization task", "txIdx", txResult.txReq.txIndex, "merged", p.mergedTxIndex)
-
 			txIndex := txResult.txReq.txIndex
 			if txIndex != p.mergedTxIndex+1 {
 				continue
@@ -742,7 +726,6 @@ func (p *ParallelStateProcessor) finalizationSlotLoop(schedulerInfo *ParallelSch
 
 			schedulerInfo.finalizationTopic.Pub(txIndex)
 
-			log.Info("finalized tx", "index", txIndex, "total", schedulerInfo.commonTxLength)
 			// exit if txs are all finalized
 			if txIndex+1 == schedulerInfo.commonTxLength {
 				close(schedulerInfo.finalizationExitChan) // notify all the routines
