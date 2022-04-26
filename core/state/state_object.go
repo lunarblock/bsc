@@ -234,9 +234,12 @@ func (s *StateObject) GetCommittedState(db Database, key common.Hash) common.Has
 		//   1) resurrect happened, and new slot values were set -- those should
 		//      have been handles via pendingStorage above.
 		//   2) we don't have new values, and can deliver empty response back
+		s.db.snapParallelLock.RLock()
 		if _, destructed := s.db.snapDestructs[s.address]; destructed {
+			s.db.snapParallelLock.RUnlock()
 			return common.Hash{}
 		}
+		s.db.snapParallelLock.RUnlock()
 		enc, err = s.db.snap.Storage(s.addrHash, crypto.Keccak256Hash(key.Bytes()))
 	}
 	// If snapshot unavailable or reading from it failed, load from the database

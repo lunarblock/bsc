@@ -164,12 +164,13 @@ type ParallelState struct {
 // * Contracts
 // * Accounts
 type StateDB struct {
-	db             Database
-	prefetcherLock sync.Mutex
-	prefetcher     *triePrefetcher
-	originalRoot   common.Hash // The pre-state root, before any changes were made
-	expectedRoot   common.Hash // The state root in the block header
-	stateRoot      common.Hash // The calculation result of IntermediateRoot
+	db               Database
+	prefetcherLock   sync.Mutex
+	prefetcher       *triePrefetcher
+	originalRoot     common.Hash // The pre-state root, before any changes were made
+	expectedRoot     common.Hash // The state root in the block header
+	stateRoot        common.Hash // The calculation result of IntermediateRoot
+	snapParallelLock sync.RWMutex
 
 	trie           Trie
 	hasher         crypto.KeccakState
@@ -449,7 +450,9 @@ func (s *StateDB) MergeSlotDB(slotDb *StateDB, slotReceipt *types.Receipt, txInd
 			// One transaction add balance 0 to an empty address, will delete it(delete empty is enabled).
 			// While another concurrent transaction could add a none-zero balance to it, make it not empty
 			// We fixed it by add a addr state read record for add balance 0
+			s.snapParallelLock.Lock()
 			s.snapDestructs[k] = struct{}{}
+			s.snapParallelLock.Unlock()
 		}
 
 		// slotDb.snapAccounts should be empty, comment out and to be deleted later
@@ -1478,9 +1481,11 @@ func (s *StateDB) CopyForSlot() *StateDB {
 		state.snap = s.snap
 		// deep copy needed
 		state.snapDestructs = make(map[common.Address]struct{})
+		s.snapParallelLock.RLock()
 		for k, v := range s.snapDestructs {
 			state.snapDestructs[k] = v
 		}
+		s.snapParallelLock.RUnlock()
 		//
 		state.snapAccounts = make(map[common.Address][]byte)
 		for k, v := range s.snapAccounts {
