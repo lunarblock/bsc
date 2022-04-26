@@ -578,19 +578,14 @@ func (p *ParallelStateProcessor) executionScheduler(schedulerInfo *ParallelSched
 				return
 			}
 
+			nextTxId := p.findNextTxWithSameSender(schedulerInfo, finalizedTxIdx)
 			for i := finalizedTxIdx + 1; i < len(schedulerInfo.txReqs) && i <= finalizedTxIdx+executionScheduleWindow; i++ {
 				if i == finalizedTxIdx+1 ||
+					i == nextTxId ||
 					(schedulerInfo.txsStatus[i].status == TxSchedulingStatusReadyToExecute && schedulerInfo.txsStatus[i].incarnation == 0) {
 					schedulerInfo.txsStatus[i].status = TxSchedulingStatusExecuting
 					schedulerInfo.txsStatus[i].incarnation += 1
 					schedulerInfo.executionQueue <- schedulerInfo.txReqs[i]
-				} else {
-					nextTxId := p.findNextTxWithSameSender(schedulerInfo, finalizedTxIdx)
-					if nextTxId > 0 {
-						schedulerInfo.txsStatus[nextTxId].status = TxSchedulingStatusExecuting
-						schedulerInfo.txsStatus[nextTxId].incarnation += 1
-						schedulerInfo.executionQueue <- schedulerInfo.txReqs[nextTxId]
-					}
 				}
 			}
 		}
