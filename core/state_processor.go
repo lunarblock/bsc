@@ -563,7 +563,7 @@ func (p *ParallelStateProcessor) executionScheduler(schedulerInfo *ParallelSched
 }
 
 func (p *ParallelStateProcessor) validationScheduler(schedulerInfo *ParallelSchedulingInfo, txReqs []*ParallelTxRequest) {
-	executionScheduleWindow := 2 * p.parallelNum
+	executionScheduleWindow := 100
 	finalizationChan := make(chan int, executionScheduleWindow)
 	schedulerInfo.finalizationTopic.Subscribe(finalizationChan)
 
