@@ -86,7 +86,9 @@ type ParallelStateProcessor struct {
 }
 
 type ParallelSchedulingInfo struct {
+	txReqs               []*ParallelTxRequest
 	txsStatus            []TxSchedulingInfo
+	txsBySender          map[common.Address][]int
 	finalizedIdx         *int64
 	gasUsed              *uint64
 	commonTxLength       int
@@ -112,11 +114,12 @@ type TxSchedulingInfo struct {
 type TxSchedulingStatus int
 
 const (
-	TxSchedulingStatusReadyToExecute TxSchedulingStatus = 0
-	TxSchedulingStatusExecuting      TxSchedulingStatus = 1
-	TxSchedulingStatusExecuted       TxSchedulingStatus = 2
-	TxSchedulingStatusValidating     TxSchedulingStatus = 3
-	TxSchedulingStatusFinalized      TxSchedulingStatus = 4
+	TxSchedulingStatusPending        TxSchedulingStatus = 0
+	TxSchedulingStatusReadyToExecute TxSchedulingStatus = 1
+	TxSchedulingStatusExecuting      TxSchedulingStatus = 2
+	TxSchedulingStatusExecuted       TxSchedulingStatus = 3
+	TxSchedulingStatusValidating     TxSchedulingStatus = 4
+	TxSchedulingStatusFinalized      TxSchedulingStatus = 5
 )
 
 type SchedulerTopic struct {
@@ -521,15 +524,30 @@ func (p *ParallelStateProcessor) init() {
 	}
 }
 
-func (p *ParallelStateProcessor) executionScheduler(schedulerInfo *ParallelSchedulingInfo, txReqs []*ParallelTxRequest) {
+func (p *ParallelStateProcessor) executionScheduler(schedulerInfo *ParallelSchedulingInfo) {
 	executionScheduleWindow := 2 * p.parallelNum
 
 	// sub msgs
 	finalizationChan := make(chan int, executionScheduleWindow)
 	schedulerInfo.finalizationTopic.Subscribe(finalizationChan)
+	executionChan := make(chan int, executionScheduleWindow)
+	schedulerInfo.executionTopic.Subscribe(executionChan)
+
+	// sort the txs by sender
+	for i, req := range schedulerInfo.txReqs {
+		if txs, ok := schedulerInfo.txsBySender[req.msg.From()]; !ok {
+			newTxs := make([]int, 0)
+			newTxs = append(newTxs, i)
+			schedulerInfo.txsBySender[req.msg.From()] = newTxs
+			schedulerInfo.txsStatus[i].status = TxSchedulingStatusReadyToExecute
+		} else {
+			txs = append(txs, i)
+			schedulerInfo.txsBySender[req.msg.From()] = txs
+		}
+	}
 
 	// initial scheduling
-	for i, req := range txReqs {
+	for i, req := range schedulerInfo.txReqs {
 		if i > executionScheduleWindow {
 			break
 		}
@@ -544,26 +562,60 @@ func (p *ParallelStateProcessor) executionScheduler(schedulerInfo *ParallelSched
 		select {
 		case <-schedulerInfo.finalizationExitChan:
 			return
+		case executedTx := <-executionChan:
+			nextTxIdx := p.findNextTxWithSameSender(schedulerInfo, executedTx)
+			if nextTxIdx < 0 {
+				continue
+			}
+			if schedulerInfo.txsStatus[nextTxIdx].status == TxSchedulingStatusPending {
+				schedulerInfo.txsStatus[nextTxIdx].status = TxSchedulingStatusExecuting
+				schedulerInfo.txsStatus[nextTxIdx].incarnation += 1
+				schedulerInfo.executionQueue <- schedulerInfo.txReqs[nextTxIdx]
+			}
 		case finalizedTxIdx := <-finalizationChan:
 			log.Info("executionScheduler: received finalization tx", "txIdx", finalizedTxIdx)
 			if finalizedTxIdx+1 == schedulerInfo.commonTxLength {
 				return
 			}
 
-			for i := finalizedTxIdx + 1; i < len(txReqs) && i <= finalizedTxIdx+executionScheduleWindow; i++ {
+			for i := finalizedTxIdx + 1; i < len(schedulerInfo.txReqs) && i <= finalizedTxIdx+executionScheduleWindow; i++ {
 				if i == finalizedTxIdx+1 ||
 					(schedulerInfo.txsStatus[i].status == TxSchedulingStatusReadyToExecute && schedulerInfo.txsStatus[i].incarnation == 0) {
 					schedulerInfo.txsStatus[i].status = TxSchedulingStatusExecuting
 					schedulerInfo.txsStatus[i].incarnation += 1
-					schedulerInfo.executionQueue <- txReqs[i]
+					schedulerInfo.executionQueue <- schedulerInfo.txReqs[i]
+				} else {
+					nextTxId := p.findNextTxWithSameSender(schedulerInfo, finalizedTxIdx)
+					if nextTxId > 0 {
+						schedulerInfo.txsStatus[nextTxId].status = TxSchedulingStatusExecuting
+						schedulerInfo.txsStatus[nextTxId].incarnation += 1
+						schedulerInfo.executionQueue <- schedulerInfo.txReqs[nextTxId]
+					}
 				}
 			}
 		}
 	}
 }
 
+func (p *ParallelStateProcessor) findNextTxWithSameSender(schedulerInfo *ParallelSchedulingInfo, txIdx int) int {
+	nextIdx := -1
+	pendingTxs := schedulerInfo.txsBySender[schedulerInfo.txReqs[txIdx].msg.From()]
+	if len(pendingTxs) <= 1 {
+		return nextIdx
+	}
+
+	// get the next tx index
+	for i := 0; i < len(pendingTxs); i++ {
+		if pendingTxs[i] == txIdx && i+1 < len(pendingTxs) {
+			nextIdx = pendingTxs[i+1]
+			break
+		}
+	}
+	return nextIdx
+}
+
 func (p *ParallelStateProcessor) validationScheduler(schedulerInfo *ParallelSchedulingInfo, txReqs []*ParallelTxRequest) {
-	executionScheduleWindow := 100
+	executionScheduleWindow := 2 * p.parallelNum
 	finalizationChan := make(chan int, executionScheduleWindow)
 	schedulerInfo.finalizationTopic.Subscribe(finalizationChan)
 
@@ -639,7 +691,7 @@ func (p *ParallelStateProcessor) executionSlotLoop(schedulerInfo *ParallelSchedu
 			}
 			schedulerInfo.txsStatus[txReq.txIndex].txResult = txResult
 			schedulerInfo.txsStatus[txReq.txIndex].status = TxSchedulingStatusValidating
-
+			schedulerInfo.executionTopic.Pub(txReq.txIndex)
 			schedulerInfo.validationQueue <- txResult // for executed tx, send it to the validation queue directly
 		}
 	}
@@ -1271,6 +1323,8 @@ func (p *ParallelStateProcessor) resetScheduler(stateDB *state.StateDB, txReqs [
 	}
 
 	schedulerInfo.commonTxLength = len(txReqs)
+	schedulerInfo.txReqs = txReqs
+	schedulerInfo.txsBySender = make(map[common.Address][]int)
 	schedulerInfo.executionTopic = NewSchedulerTopic()
 	schedulerInfo.validationTopic = NewSchedulerTopic()
 	schedulerInfo.finalizationTopic = NewSchedulerTopic()
@@ -1282,7 +1336,7 @@ func (p *ParallelStateProcessor) resetScheduler(stateDB *state.StateDB, txReqs [
 	schedulerInfo.finalizationExitChan = make(chan struct{})
 	schedulerInfo.unconfirmedStateDBs = new(sync.Map)
 
-	go p.executionScheduler(schedulerInfo, txReqs)
+	go p.executionScheduler(schedulerInfo)
 	go p.validationScheduler(schedulerInfo, txReqs)
 
 	for i := 0; i < p.parallelNum; i++ {
