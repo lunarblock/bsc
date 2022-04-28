@@ -695,7 +695,7 @@ func (p *ParallelStateProcessor) getNextTxRequest(slotIndex int, curTxIndex int)
 		if ok {
 			txSlotIdx := p.txReqs[sameSenderIdx].slotIndex
 			pendingLength := p.slotState[txSlotIdx].pendingTxLength
-			if pendingLength < len(p.txReqs)/p.parallelNum {
+			if pendingLength < len(p.txReqs)/p.parallelNum && sameSenderIdx > p.mergedTxIndex {
 				txReq.slotIndex = txSlotIdx
 				p.slotState[txSlotIdx].pendingTxLength += 1
 
@@ -716,7 +716,7 @@ func (p *ParallelStateProcessor) getNextTxRequest(slotIndex int, curTxIndex int)
 			if ok {
 				txSlotIdx := p.txReqs[sameToIdx].slotIndex
 				pendingLength := p.slotState[txSlotIdx].pendingTxLength
-				if pendingLength < len(p.txReqs)/p.parallelNum {
+				if pendingLength < len(p.txReqs)/p.parallelNum && sameToIdx > p.mergedTxIndex {
 					txReq.slotIndex = txSlotIdx
 					p.slotState[txSlotIdx].pendingTxLength += 1
 
