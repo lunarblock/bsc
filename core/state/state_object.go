@@ -25,7 +25,9 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -309,6 +311,7 @@ func (s *StateObject) getTrie(db Database) Trie {
 			s.trie, err = db.OpenStorageTrie(s.addrHash, s.data.Root)
 			if err != nil {
 				s.trie, _ = db.OpenStorageTrie(s.addrHash, common.Hash{})
+				log.Info("open storage trie error", "addr", s.address.String(), "err", err.Error(), "isTrieNil", s.trie == nil)
 				s.setError(fmt.Errorf("can't create storage trie: %v", err))
 			}
 		}
@@ -416,7 +419,14 @@ func (s *StateObject) GetCommittedState(db Database, key common.Hash) common.Has
 		if metrics.EnabledExpensive {
 			meter = &s.db.StorageReads
 		}
-		if enc, err = s.getTrie(db).TryGet(key.Bytes()); err != nil {
+
+		trie := s.getTrie(db)
+		if err != nil {
+			log.Info("get storage from snapshot error", "addr", s.address.String(), "err", err.Error())
+		}
+		log.Info("get storage from snapshot error", "addr", s.address.String(), "key", hexutil.Encode(key.Bytes()), "isSnapNil", s.db.snap == nil,
+			"isErrorNil", err == nil, "trieNil", trie == nil)
+		if enc, err = trie.TryGet(key.Bytes()); err != nil {
 			s.setError(err)
 			return common.Hash{}
 		}
@@ -697,6 +707,7 @@ func (s *StateObject) MergeSlotObject(db Database, dirtyObjs *StateObject, keys 
 		// In parallel mode, always GetState by StateDB, not by StateObject directly,
 		// since it the KV could exist in unconfirmed DB.
 		// But here, it should be ok, since the KV should be changed and valid in the SlotDB,
+		log.Info("get state in MergeSlotObject", "txIdx", "addr", dirtyObjs.address.String())
 		s.SetState(db, key, dirtyObjs.GetState(db, key))
 	}
 }

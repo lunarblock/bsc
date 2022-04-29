@@ -1315,6 +1315,7 @@ func (s *StateDB) GetCodeHash(addr common.Address) common.Hash {
 //   -> pending of main StateDB
 //   -> origin
 func (s *StateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
+	log.Info("get state in GetState", "txIdx", s.txIndex, "tx", s.thash.String(), "addr", addr.String())
 	if s.parallel.isSlotDB {
 
 		// 1.Try to get from dirty

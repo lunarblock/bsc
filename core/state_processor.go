@@ -512,6 +512,7 @@ func (p *ParallelStateProcessor) executeInSlot(slotIndex int, txReq *ParallelTxR
 	// each slot would use its own gas pool, and will do gaslimit check later
 	gpSlot := new(GasPool).AddGas(txReq.gasLimit) // block.GasLimit()
 
+	log.Info("execute tx in slot", "slotId", slotIndex, "txIdx", txReq.txIndex, "tx", txReq.tx.Hash())
 	evm, result, err := applyTransactionStageExecution(txReq.msg, gpSlot, slotDB, vmenv)
 
 	if err != nil {
