@@ -170,13 +170,17 @@ func (p *triePrefetcher) copy() *triePrefetcher {
 func (p *triePrefetcher) prefetch(root common.Hash, keys [][]byte, accountHash common.Hash) {
 	// If the prefetcher is an inactive one, bail out
 	if p.fetches != nil {
+		log.Info("inactive prefetcher", "addrHash", accountHash.String())
 		return
 	}
 	// Active fetcher, schedule the retrievals
 	fetcher := p.fetchers[root]
 	if fetcher == nil {
 		fetcher = newSubfetcher(p.db, root, accountHash)
+		log.Info("new sub prefetcher", "addrHash", accountHash.String())
 		p.fetchers[root] = fetcher
+	} else {
+		log.Info("use old prefetcher", "addrHash", accountHash.String())
 	}
 	fetcher.schedule(keys)
 }

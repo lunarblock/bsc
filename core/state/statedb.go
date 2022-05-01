@@ -2125,6 +2125,7 @@ func (s *StateDB) MergeSlotDB(slotDb *ParallelStateDB, slotReceipt *types.Receip
 					newMainObj.setNonce(dirtyObj.Nonce())
 				}
 			}
+			log.Info("finalise obj", "addr", newMainObj.address.String(), "addrHash", newMainObj.addrHash.String())
 			newMainObj.finalise(true) // true: prefetch on dispatcher
 			// update the object
 			s.storeStateObj(addr, newMainObj)
